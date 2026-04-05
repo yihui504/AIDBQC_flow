@@ -1,0 +1,840 @@
+{
+  "tasks": [
+    {
+      "id": "TASK-1.1",
+      "title": "PersistentCollectionPool 实现",
+      "description": "预创建集合池，逻辑删除，消除Type-2环境噪声",
+      "phase": "Phase 1: Engineering Reliability",
+      "priority": "critical",
+      "estimated_hours": 24,
+      "status": "pending",
+      "deliverables": [
+        "src/pools/collection_pool.py",
+        "tests/unit/test_collection_pool.py",
+        "docs/collection_pool.md",
+        "性能测试报告"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "集合池初始化成功率",
+          "target_value": 95.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "运行测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "集合复用延迟",
+          "target_value": 100.0,
+          "current_value": 0.0,
+          "unit": "ms (P99)",
+          "measurement_method": "性能测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "数据清理成功率",
+          "target_value": 99.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "功能测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "并发安全性",
+          "target_value": 100.0,
+          "current_value": 0.0,
+          "unit": "% (无竞态条件)",
+          "measurement_method": "并发测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "测试覆盖率",
+          "target_value": 90.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "pytest-cov",
+          "is_met": false,
+          "progress_percentage": 0.0
+        }
+      ],
+      "dependencies": [],
+      "assignee": "",
+      "completion_percentage": 0.0,
+      "is_ready_to_start": true,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": null,
+      "notes": ""
+    },
+    {
+      "id": "TASK-1.2",
+      "title": "异常处理标准化",
+      "description": "建立异常层次结构，所有异常携带证据",
+      "phase": "Phase 1: Engineering Reliability",
+      "priority": "critical",
+      "estimated_hours": 16,
+      "status": "pending",
+      "deliverables": [
+        "src/exceptions.py",
+        "tests/unit/test_exceptions.py",
+        "docs/exception_handling.md",
+        "错误码清单"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "异常完整性",
+          "target_value": 100.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "代码审查",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "错误码唯一性",
+          "target_value": 100.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "自动化测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "证据携带率",
+          "target_value": 100.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "代码审查",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "文档覆盖率",
+          "target_value": 100.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "pydocstyle",
+          "is_met": false,
+          "progress_percentage": 0.0
+        }
+      ],
+      "dependencies": [
+        "TASK-1.1"
+      ],
+      "assignee": "",
+      "completion_percentage": 0.0,
+      "is_ready_to_start": false,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": null,
+      "notes": ""
+    },
+    {
+      "id": "TASK-1.3",
+      "title": "单元测试补充",
+      "description": "补充核心模块单元测试，覆盖率达标",
+      "phase": "Phase 1: Engineering Reliability",
+      "priority": "critical",
+      "estimated_hours": 24,
+      "status": "pending",
+      "deliverables": [
+        "tests/unit/test_coverage_monitor.py",
+        "tests/unit/test_state.py",
+        "tests/unit/test_telemetry.py",
+        "tests/unit/test_graph.py",
+        "覆盖率报告 (HTML)"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "coverage_monitor 覆盖率",
+          "target_value": 90.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "pytest-cov",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "state 覆盖率",
+          "target_value": 90.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "pytest-cov",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "telemetry 覆盖率",
+          "target_value": 85.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "pytest-cov",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "graph 覆盖率",
+          "target_value": 80.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "pytest-cov",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "测试通过率",
+          "target_value": 100.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "pytest",
+          "is_met": false,
+          "progress_percentage": 0.0
+        }
+      ],
+      "dependencies": [],
+      "assignee": "",
+      "completion_percentage": 0.0,
+      "is_ready_to_start": true,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": null,
+      "notes": ""
+    },
+    {
+      "id": "TASK-1.4",
+      "title": "配置中心化",
+      "description": "统一配置管理，支持环境变量和配置文件",
+      "phase": "Phase 1: Engineering Reliability",
+      "priority": "high",
+      "estimated_hours": 8,
+      "status": "completed",
+      "deliverables": [
+        "src/config.py",
+        ".env.example",
+        "config.yaml.example",
+        "docs/configuration.md"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "配置完整性",
+          "target_value": 100.0,
+          "current_value": 100.0,
+          "unit": "%",
+          "measurement_method": "代码审查",
+          "is_met": true,
+          "progress_percentage": 100.0
+        },
+        {
+          "metric": "配置验证",
+          "target_value": 100.0,
+          "current_value": 100.0,
+          "unit": "%",
+          "measurement_method": "测试",
+          "is_met": true,
+          "progress_percentage": 100.0
+        }
+      ],
+      "dependencies": [],
+      "assignee": "",
+      "completion_percentage": 100.0,
+      "is_ready_to_start": true,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": "2026-03-30T17:59:16.638032",
+      "notes": ""
+    },
+    {
+      "id": "TASK-1.5",
+      "title": "Context Reset Strategy 实现",
+      "description": "实现上下文重置策略，解决context anxiety问题。基于Anthropic研究：每N次测试后重置，使用WorkflowState作为结构化交接物",
+      "phase": "Phase 1: Engineering Reliability",
+      "priority": "high",
+      "estimated_hours": 12,
+      "status": "pending",
+      "deliverables": [
+        "src/context/reset_manager.py",
+        "src/context/handoff.py",
+        "tests/unit/test_context_reset.py",
+        "docs/context_reset_strategy.md"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "Reset成功恢复率",
+          "target_value": 95.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "集成测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "状态完整性",
+          "target_value": 100.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "状态验证测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "Token效率提升",
+          "target_value": 20.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "Token使用对比",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "上下文焦虑消除",
+          "target_value": 100.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "长运行测试观察",
+          "is_met": false,
+          "progress_percentage": 0.0
+        }
+      ],
+      "dependencies": [
+        "TASK-1.3"
+      ],
+      "assignee": "",
+      "completion_percentage": 0.0,
+      "is_ready_to_start": false,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": null,
+      "notes": ""
+    },
+    {
+      "id": "TASK-2.1",
+      "title": "EnhancedSemanticOracle + Evaluator Calibration Loop",
+      "description": "增强语义预言机 + 评估器校准循环。基于Anthropic研究: (1) 校准循环: 在已知bug集上运行，对比评估器判断与人工评估，迭代调整prompt直到对齐 (2) Sprint契约: Agent2与Agent4在测试生成前协商成功标准 (3) 明确评分标准: Test Diversity, Defect Novelty, Contract Adherence, Bug Realism (4) Few-shot示例带详细分数分解",
+      "phase": "Phase 2: Testing Capability Enhancement",
+      "priority": "critical",
+      "estimated_hours": 48,
+      "status": "pending",
+      "deliverables": [
+        "src/oracles/enhanced_semantic_oracle.py",
+        "src/oracles/evaluator_calibration.py",
+        "src/contracts/sprint_contract.py",
+        "src/harness/grading_criteria.py",
+        "tests/unit/test_enhanced_semantic_oracle.py",
+        "tests/unit/test_evaluator_calibration.py",
+        "验证集 (100+ 已知bug样本)",
+        "Few-shot示例库 (20+ 带评分的样本)",
+        "校准报告 (对齐度曲线)"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "评估器精确率",
+          "target_value": 90.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "验证集评估",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "误报率",
+          "target_value": 10.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "验证集评估",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "契约协商成功率",
+          "target_value": 95.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "集成测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "平均协商轮数",
+          "target_value": 3.0,
+          "current_value": 0.0,
+          "unit": "轮",
+          "measurement_method": "统计",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "Test Diversity阈值",
+          "target_value": 0.7,
+          "current_value": 0.0,
+          "unit": "余弦相似度",
+          "measurement_method": "多样性算法",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "Defect Novelty阈值",
+          "target_value": 0.8,
+          "current_value": 0.0,
+          "unit": "语义相似度",
+          "measurement_method": "去重算法",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "Contract Adherence",
+          "target_value": 100.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "L1/L2验证",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "Bug Realism加权分数",
+          "target_value": 0.75,
+          "current_value": 0.0,
+          "unit": "分数",
+          "measurement_method": "Type-1/2/3/4分类",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "评估延迟",
+          "target_value": 2.0,
+          "current_value": 0.0,
+          "unit": "秒/case (P99)",
+          "measurement_method": "性能测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "测试覆盖率",
+          "target_value": 85.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "pytest-cov",
+          "is_met": false,
+          "progress_percentage": 0.0
+        }
+      ],
+      "dependencies": [
+        "TASK-1.2",
+        "TASK-1.4",
+        "TASK-1.5"
+      ],
+      "assignee": "",
+      "completion_percentage": 0.0,
+      "is_ready_to_start": false,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": null,
+      "notes": ""
+    },
+    {
+      "id": "TASK-2.2",
+      "title": "EnhancedTestGenerator + Sprint Contract Integration",
+      "description": "增强测试生成器 + Sprint契约集成。基于Anthropic研究: (1) 在测试生成前与评估器(Agent4)协商契约 (2) 契约定义: test_scope, success_criteria, verification_methods, oracle_constraints (3) 迭代直到双方同意 (4) 生成后自评再交给QA",
+      "phase": "Phase 2: Testing Capability Enhancement",
+      "priority": "critical",
+      "estimated_hours": 32,
+      "status": "pending",
+      "deliverables": [
+        "src/agents/enhanced_test_generator.py",
+        "src/contracts/contract_negotiation.py",
+        "tests/unit/test_enhanced_test_generator.py",
+        "tests/unit/test_contract_negotiation.py",
+        "多样性评估报告",
+        "契约协商示例日志"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "语义多样性",
+          "target_value": 0.7,
+          "current_value": 0.0,
+          "unit": "分数",
+          "measurement_method": "多样性算法测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "边界覆盖率",
+          "target_value": 60.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "边界检测测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "对抗检出率",
+          "target_value": 20.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "对抗测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "契约合规率",
+          "target_value": 95.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "契约验证",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "测试覆盖率",
+          "target_value": 80.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "pytest-cov",
+          "is_met": false,
+          "progress_percentage": 0.0
+        }
+      ],
+      "dependencies": [
+        "TASK-2.1"
+      ],
+      "assignee": "",
+      "completion_percentage": 0.0,
+      "is_ready_to_start": false,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": null,
+      "notes": ""
+    },
+    {
+      "id": "TASK-2.3",
+      "title": "EnhancedDefectDeduplicator 实现",
+      "description": "增强缺陷去重器，多维度相似度，层次聚类",
+      "phase": "Phase 2: Testing Capability Enhancement",
+      "priority": "high",
+      "estimated_hours": 24,
+      "status": "pending",
+      "deliverables": [
+        "src/defects/enhanced_deduplicator.py",
+        "tests/unit/test_enhanced_deduplicator.py",
+        "去重评估报告"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "去重准确率",
+          "target_value": 90.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "标注集测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "召回率",
+          "target_value": 95.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "标注集测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "延迟",
+          "target_value": 1.0,
+          "current_value": 0.0,
+          "unit": "秒/100缺陷",
+          "measurement_method": "性能测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        }
+      ],
+      "dependencies": [
+        "TASK-2.1"
+      ],
+      "assignee": "",
+      "completion_percentage": 0.0,
+      "is_ready_to_start": false,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": null,
+      "notes": ""
+    },
+    {
+      "id": "TASK-3.1",
+      "title": "Streamlit实时监控仪表板",
+      "description": "实时监控仪表板，关键指标可视化",
+      "phase": "Phase 3: Observability Upgrade",
+      "priority": "high",
+      "estimated_hours": 24,
+      "status": "pending",
+      "deliverables": [
+        "src/dashboard/app.py",
+        "requirements-dashboard.txt",
+        "docs/dashboard_guide.md"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "更新延迟",
+          "target_value": 5.0,
+          "current_value": 0.0,
+          "unit": "秒",
+          "measurement_method": "性能测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "多run支持",
+          "target_value": 3.0,
+          "current_value": 0.0,
+          "unit": "个",
+          "measurement_method": "功能测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "响应时间",
+          "target_value": 500.0,
+          "current_value": 0.0,
+          "unit": "ms",
+          "measurement_method": "性能测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        }
+      ],
+      "dependencies": [
+        "TASK-1.3",
+        "TASK-1.4"
+      ],
+      "assignee": "",
+      "completion_percentage": 0.0,
+      "is_ready_to_start": false,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": null,
+      "notes": ""
+    },
+    {
+      "id": "TASK-3.2",
+      "title": "AlertManager告警系统",
+      "description": "告警管理系统，多渠道通知",
+      "phase": "Phase 3: Observability Upgrade",
+      "priority": "high",
+      "estimated_hours": 16,
+      "status": "pending",
+      "deliverables": [
+        "src/alerting/alert_manager.py",
+        "src/alerting/handlers.py",
+        "docs/alerting_guide.md"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "告警覆盖率",
+          "target_value": 100.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "延迟",
+          "target_value": 1.0,
+          "current_value": 0.0,
+          "unit": "秒",
+          "measurement_method": "性能测试",
+          "is_met": false,
+          "progress_percentage": 0.0
+        }
+      ],
+      "dependencies": [
+        "TASK-1.4"
+      ],
+      "assignee": "",
+      "completion_percentage": 0.0,
+      "is_ready_to_start": true,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": null,
+      "notes": ""
+    },
+    {
+      "id": "TASK-4.1",
+      "title": "基线对比实验",
+      "description": "对比增强前后系统的缺陷发现能力",
+      "phase": "Phase 4: Defect Discovery Experiments",
+      "priority": "critical",
+      "estimated_hours": 16,
+      "status": "pending",
+      "deliverables": [
+        "基线对比实验报告",
+        "缺陷清单",
+        "可复现脚本"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "缺陷发现数提升",
+          "target_value": 300.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "统计分析",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "Type-4检出率",
+          "target_value": 30.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "分类统计",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "误报率降低",
+          "target_value": 80.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "对比分析",
+          "is_met": false,
+          "progress_percentage": 0.0
+        }
+      ],
+      "dependencies": [
+        "TASK-2.1",
+        "TASK-2.2",
+        "TASK-2.3"
+      ],
+      "assignee": "",
+      "completion_percentage": 0.0,
+      "is_ready_to_start": false,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": null,
+      "notes": ""
+    },
+    {
+      "id": "TASK-4.2",
+      "title": "跨数据库验证",
+      "description": "在Milvus/Qdrant/Weaviate上验证",
+      "phase": "Phase 4: Defect Discovery Experiments",
+      "priority": "high",
+      "estimated_hours": 16,
+      "status": "pending",
+      "deliverables": [
+        "跨数据库实验报告",
+        "各数据库缺陷清单"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "跨数据库一致性",
+          "target_value": 80.0,
+          "current_value": 0.0,
+          "unit": "%",
+          "measurement_method": "统计分析",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "缺陷发现总数",
+          "target_value": 15.0,
+          "current_value": 0.0,
+          "unit": "个",
+          "measurement_method": "统计",
+          "is_met": false,
+          "progress_percentage": 0.0
+        }
+      ],
+      "dependencies": [
+        "TASK-4.1"
+      ],
+      "assignee": "",
+      "completion_percentage": 0.0,
+      "is_ready_to_start": false,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": null,
+      "notes": ""
+    },
+    {
+      "id": "TASK-4.3",
+      "title": "长期稳定性测试",
+      "description": "24小时连续运行测试",
+      "phase": "Phase 4: Defect Discovery Experiments",
+      "priority": "high",
+      "estimated_hours": 8,
+      "status": "pending",
+      "deliverables": [
+        "稳定性测试报告",
+        "监控数据"
+      ],
+      "acceptance_criteria": [
+        {
+          "metric": "运行稳定性",
+          "target_value": 24.0,
+          "current_value": 0.0,
+          "unit": "小时无崩溃",
+          "measurement_method": "监控",
+          "is_met": false,
+          "progress_percentage": 0.0
+        },
+        {
+          "metric": "内存稳定",
+          "target_value": 10.0,
+          "current_value": 0.0,
+          "unit": "%/h (增长)",
+          "measurement_method": "监控",
+          "is_met": false,
+          "progress_percentage": 0.0
+        }
+      ],
+      "dependencies": [
+        "TASK-3.1",
+        "TASK-3.2"
+      ],
+      "assignee": "",
+      "completion_percentage": 0.0,
+      "is_ready_to_start": false,
+      "start_date": null,
+      "due_date": null,
+      "completed_date": null,
+      "notes": ""
+    }
+  ],
+  "progress_report": {
+    "summary": {
+      "total_tasks": 13,
+      "completed_tasks": 1,
+      "in_progress_tasks": 0,
+      "completion_percentage": 7.6923076923076925,
+      "total_estimated_hours": 268,
+      "completed_hours": 8
+    },
+    "by_phase": {
+      "Phase 1: Engineering Reliability": {
+        "total": 5,
+        "completed": 1,
+        "percentage": 20.0
+      },
+      "Phase 2: Testing Capability Enhancement": {
+        "total": 3,
+        "completed": 0,
+        "percentage": 0.0
+      },
+      "Phase 3: Observability Upgrade": {
+        "total": 2,
+        "completed": 0,
+        "percentage": 0.0
+      },
+      "Phase 4: Defect Discovery Experiments": {
+        "total": 3,
+        "completed": 0,
+        "percentage": 0.0
+      }
+    },
+    "pending_tasks": 3,
+    "blocked_tasks": 0
+  },
+  "export_date": "2026-03-30T17:59:16.638032"
+}

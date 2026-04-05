@@ -1,0 +1,10 @@
+- [ ] `agent0_env_recon.py` 成功恢复使用 `crawl4ai` 进行爬取。
+- [ ] 运行全程无 Firefox/Chromium 浏览器弹窗及进程冲突报错。
+- [ ] `main.py` 成功完成 10 轮迭代且未发生未捕获的崩溃。
+- [ ] L1 契约中包含 `doc_parser` 预提取的结构化数值（如 dimension=32768）。
+- [ ] `raw_docs.json` 包含 5 个以上 Source 且内容长度超过 50KB。
+- [ ] GitHub Issue 中的所有 URL 均有效且可访问。
+- [ ] 抽样审计显示 Issue 中的文档引用与 Bug 逻辑高度相关。
+- [ ] 至少有一个 Issue 的 MRE 代码在手动执行时能复现报告中的错误或状态。
+- [ ] 证据链审查显示每个 DefectReport 都有明确的“违约”逻辑支撑。
+- [ ] 评估报告文档已完成，内容客观且包含待改进点分析。

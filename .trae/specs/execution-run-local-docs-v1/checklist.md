@@ -1,0 +1,6 @@
+- [ ] 配置项 `docs.source: "local_jsonl"` 已在运行时生效
+- [ ] Agent 0 已声明加载 453 条本地文档片段
+- [ ] 运行过程中遇到任何报错（如速率限制、死锁）均已通过底层代码修复（而非绕过）
+- [ ] 生成的 `defect_reports` 中 `source_url` 字段已成功填充且与原文一致
+- [ ] 最终产出了基于 Milvus v2.6.x 文档、经过真实性校验的 GitHub Issue
+- [ ] 系统在 `max_iterations=3` 后成功完成并输出统计报告

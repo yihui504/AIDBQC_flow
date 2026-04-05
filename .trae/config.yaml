@@ -1,0 +1,39 @@
+# AI-DB-QC Configuration File
+# 
+# This file contains configuration options for various features in the AI-DB-QC system.
+# Configuration values can be overridden using environment variables with the prefix AI_DB_QC_
+# For example: AI_DB_QC_CACHE_ENABLED=true will override cache.enabled
+
+cache:
+  enabled: false
+  path: ".trae/cache"
+  ttl_days: 7
+
+docker_pool:
+  enabled: false
+  min_connections: 1
+  max_connections: 3
+  idle_timeout_minutes: 10
+
+logging:
+  async: false
+  max_file_size_mb: 50
+  backup_count: 10
+
+isolated_mre:
+  enabled: false
+  timeout_seconds: 30
+  image: "python:3.11-slim"
+
+harness:
+  max_token_budget: 1000000
+  max_iterations: 4
+
+rate_limiting:
+  enabled: true
+  max_requests_per_minute: 5
+  wait_on_limit: true
+
+docs:
+  source: "local_jsonl"
+  local_jsonl_path: ".trae/cache/milvus_io_docs_depth3.jsonl"

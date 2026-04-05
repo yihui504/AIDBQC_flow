@@ -1,0 +1,66 @@
+# AI-DB-QC Configuration File (YAML Format)
+# Copy this file to config.yaml and adjust values
+
+# ============================================================================
+# Application Settings
+# ============================================================================
+app_name: AI-DB-QC
+app_version: "1.0.0"
+environment: development  # development, testing, production
+debug: false
+log_level: INFO
+
+# ============================================================================
+# LLM Configuration
+# ============================================================================
+llm:
+  provider: anthropic
+  api_key: null  # Set via environment variable
+  api_url: null
+  model: claude-opus-4-6
+  max_tokens: 4096
+  temperature: 0.7
+
+# ============================================================================
+# Database Configuration
+# ============================================================================
+database:
+  type: milvus
+  host: localhost
+  port: 19530
+  username: null
+  password: null
+  database: null
+  secure: false
+
+# ============================================================================
+# Harness Configuration
+# ============================================================================
+harness:
+  max_iterations: 10
+  max_token_budget: 100000
+  max_consecutive_failures: 3
+  similarity_threshold: 0.9
+  history_limit: 100
+
+  # Collection Pool
+  pool_min_size: 3
+  pool_max_size: 10
+  pool_max_idle_seconds: 1800
+
+  # Telemetry
+  telemetry_enabled: true
+  telemetry_dir: ".trae/runs"
+  telemetry_file: "telemetry.jsonl"
+
+# ============================================================================
+# Agent Configuration (timeouts in seconds)
+# ============================================================================
+agents:
+  agent0_timeout: 30   # Environment Recon
+  agent1_timeout: 60   # Contract Analyst
+  agent2_timeout: 90   # Test Generator
+  agent3_timeout: 30   # Executor
+  agent4_timeout: 60   # Oracle
+  agent5_timeout: 60   # Diagnoser
+  agent6_timeout: 30   # Verifier

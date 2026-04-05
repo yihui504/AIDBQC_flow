@@ -1,0 +1,7 @@
+- [ ] `TestCase` 对象成功包含 `is_negative_test` 标记。
+- [ ] Agent 2 产出的用例中，至少包含 2 个故意越界的非法维度（如 dim=0 或 dim=65536）。
+- [ ] Agent 3 的日志显示其将非法 payload 成功发送至 Milvus 容器。
+- [ ] 出现 `Type-1` 缺陷报告，详细描述了“非法维度被数据库静默接受”的行为。
+- [ ] 出现 `Type-2` 缺陷报告，通过错误码审计识别出“Internal Error”等诊断不足的情况。
+- [ ] 运行全程中，Reranker Node 成功对 Top-K 结果进行了二次打分并过滤了低相关性项。
+- [ ] `AUDIT_REPORT_V3.5.md` 确认系统具备挖掘全量四型 Bug 的能力。

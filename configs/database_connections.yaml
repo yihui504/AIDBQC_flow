@@ -1,0 +1,16 @@
+# Database Connection Configurations
+databases:
+  milvus:
+    host: localhost
+    port: 19530
+    version: 2.6.12
+    
+  qdrant:
+    host: localhost
+    port: 6333
+    version: 1.12.0
+    
+  weaviate:
+    host: localhost
+    port: 8080
+    version: 1.25.0

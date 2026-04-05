@@ -1,0 +1,7 @@
+- [x] `agent6_verifier.py` 能够识别并拦截 MRE 中的 `IndentationError`。
+- [x] 验证失败的 Issue 标题前缀不再显示 `[SUCCESS]`，而是显示 `[INVALID_CODE]` 或 `[FAILED]`。
+- [x] 当 `milvus.io/docs` 被 403 拦截时，`raw_docs.json` 能够包含来自 GitHub Wiki 或其他社区源的内容。
+- [x] 爬虫日志显示触发了“二级回退搜索”。
+- [x] `data_generator.py` 产出的数据中不再包含“We are building an e-commerce...”字符串。
+- [x] 向量检索结果中的噪声数据（背景文本）显著减少。
+- [x] 最终产出的评估报告确认了 MRE 复现的真实性。

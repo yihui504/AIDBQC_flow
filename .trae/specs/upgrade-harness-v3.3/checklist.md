@@ -1,0 +1,7 @@
+- [x] `agent0_env_recon.py` 成功使用 `Crawl4AI` 且全程无浏览器弹窗。
+- [x] `raw_docs.json` 包含经 `magic_mode` 爬取的完整官方文档（不再有 403 错误）。
+- [x] `TestCase` 对象中包含 `expected_ground_truth` 列表。
+- [x] `agent3_executor.py` 在搜索前打印了“数据注入成功”的日志。
+- [x] `agent6_verifier.py` 在生成 Issue 时启动了子进程验证 MRE。
+- [x] 最终生成的 GitHub Issue 中，`Actual Behavior` 与 MRE 运行结果逻辑一致。
+- [x] 系统不再产出“因为数据库没数据而判定为 Bug”的假阳性 Issue。

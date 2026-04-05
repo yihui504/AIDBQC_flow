@@ -1,0 +1,8 @@
+- [x] `agent0_env_recon.py` 能够爬取 5 个以上 URL 且内容长度 > 10K 字符。
+- [x] 每个 `run_id` 目录下均存在完整的 `raw_docs.json` 文件。
+- [x] `doc_parser.py` 能够从 HTML 中准确识别 dimension, metric 等 API 签名。
+- [x] `agent1_contract_analyst.py` 的日志显示 LLM 接收到了 `STRUCTURED CONSTRAINTS` 上下文。
+- [x] `knowledge_base.py` 成功将长缺陷报告切分为多个 Chunk 存入 ChromaDB.
+- [x] 混合搜索结果的相关性评分（Combined Score）在技术术语查询下有明显提升。
+- [x] 产出的 GitHub Issue 中的 `Evidence & Documentation` 章节包含验证过的官方文档引用。
+- [x] 所有的单元测试和集成测试通过。

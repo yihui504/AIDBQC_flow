@@ -1,0 +1,6 @@
+- [x] `main.py` 成功完成预设轮次且未发生未捕获异常。
+- [x] `raw_docs.json` 不为空，包含了从官方或回退源抓取的有效文本。
+- [x] `data_generator.py` 注入的数据中不再包含硬编码的项目背景描述。
+- [x] Agent 6 成功识别并拦截了包含代码错误（如 `IndentationError`）的 MRE，并正确标记。
+- [x] 标记为 `[SUCCESS]` 的 Issue 其 MRE 确实触发了预期的逻辑异常（如 `MilvusException` 或不匹配断言）。
+- [x] 产出的评估报告客观反映了 v3.4 的改进效果，并提出了新的优化建议。

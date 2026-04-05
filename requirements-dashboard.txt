@@ -1,0 +1,13 @@
+# AI-DB-QC Dashboard Requirements
+# Streamlit real-time monitoring dashboard
+
+# Core Framework
+streamlit>=1.28.0
+
+# Data Visualization
+plotly>=5.18.0
+pandas>=2.0.0
+
+# Utilities
+python-dateutil>=2.8.0
+pytz>=2023.3
