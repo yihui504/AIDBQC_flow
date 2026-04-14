@@ -1,12 +1,16 @@
 import time
 import random
 import asyncio
+import logging
 from typing import Dict, Any, List, Optional
 
-from src.state import WorkflowState, TestCase, ExecutionResult
-from src.adapters.db_adapter import MilvusAdapter
+from src.state import WorkflowState, TestCase, ExecutionResult, DimensionConstraint
+from src.adapters.db_adapter import MilvusAdapter, QdrantAdapter, WeaviateAdapter
 from src.docker_probe import DockerLogsProbe
 from src.agents.agent_contract_refiner import refine_contract_from_error
+from src.config import ConfigLoader
+
+logger = logging.getLogger(__name__)
 
 class ExecutionGatingAgent:
     """
@@ -28,6 +32,28 @@ class ExecutionGatingAgent:
         except ImportError:
             print("[Agent 3] ERROR: sentence_transformers not installed. This is required for real embeddings.")
             raise RuntimeError("sentence_transformers is required but not installed.")
+        self.l1_hard_block_illegal_params = self._load_l1_hard_block_config()
+        print(f"[Agent 3] L1 hard block for illegal dimension/top_k: {self.l1_hard_block_illegal_params}")
+
+    def _load_l1_hard_block_config(self) -> bool:
+        """
+        Load L1 hard-block switch for illegal parameters.
+        Priority:
+        1) YAML/env config: agent3.l1_hard_block_illegal_params
+        2) Default: True (secure by default)
+        """
+        try:
+            config = ConfigLoader()
+            config.load()
+            config.override_from_env()
+            return config.get_bool("agent3.l1_hard_block_illegal_params", default=True)
+        except Exception as e:
+            logger.warning("[Agent 3] Failed to load L1 hard-block config, using default=True: %s", e)
+            return True
+
+    def _is_l1_hard_block_enabled(self) -> bool:
+        """Safe accessor for tests that bypass __init__ via __new__."""
+        return bool(getattr(self, "l1_hard_block_illegal_params", True))
             
     def _get_embedding(self, text: str, target_dimension: int) -> List[float]:
         """Generate real embedding and pad/truncate to target dimension."""
@@ -59,11 +85,13 @@ class ExecutionGatingAgent:
 
         return vec
 
-    def _l1_gating(self, tc: TestCase, state: WorkflowState) -> tuple[bool, str]:
+    def _l1_gating(self, tc: TestCase, state: WorkflowState) -> tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
         """
         L1 Contract Validation.
-        Returns (passed, warning_message).
-        Now allows dimension mismatch to proceed - these are potential Type-1 bugs.
+        Returns (passed, warning_message, violation_details).
+        For illegal dimension/top_k:
+        - default: hard block (passed=False)
+        - configurable: warning pass-through (passed=True)
         Checks:
         - dimension: whether within allowed_dimensions range
         - metric_type: whether in supported_metrics list
@@ -74,7 +102,7 @@ class ExecutionGatingAgent:
 
         if not state.contracts:
             print("[Agent 3] No contracts found in state. Failing L1.")
-            return False, None
+            return False, None, None
 
         is_dict = isinstance(tc, dict)
         dimension = tc.get('dimension') if is_dict else tc.dimension
@@ -86,12 +114,46 @@ class ExecutionGatingAgent:
         l1_contract = state.contracts.l1_api if hasattr(state.contracts, 'l1_api') else state.contracts.get('l1_api', {})
 
         # 1. Check Dimension - CHANGED: Return warning instead of blocking
+        # Dual-mode: prefer dimension_constraint (DimensionConstraint), fallback to allowed_dimensions
+        dc = l1_contract.get("dimension_constraint")
         allowed_dimensions = l1_contract.get("allowed_dimensions", [])
-        if allowed_dimensions and dimension not in allowed_dimensions:
+
+        if dc:
+            dc_obj = DimensionConstraint(**dc) if isinstance(dc, dict) else dc
+            if not dc_obj.contains(dimension):
+                if dc_obj.mode == "list":
+                    warning = f"Dimension {dimension} not in allowed list {dc_obj.values}"
+                else:
+                    lo_txt = str(dc_obj.min) if dc_obj.min is not None else "0"
+                    hi_txt = str(dc_obj.max) if dc_obj.max is not None else "inf"
+                    warning = f"Dimension {dimension} out of range [{lo_txt}, {hi_txt}]"
+                print(f"[Agent 3] L1 Warning: {warning}")
+                logger.info("[Agent 3] L1 Gating | Case %s | dimension=%s | result=WARNING: %s", case_id, dimension, warning)
+                hard_block = self._is_l1_hard_block_enabled()
+                severity = "hard" if hard_block else "soft"
+                violation_details = {
+                    "violation_type": "dimension_out_of_range",
+                    "actual_value": dimension,
+                    "expected_range": [dc_obj.min, dc_obj.max] if dc_obj.mode == "range" else dc_obj.values,
+                    "severity": severity,
+                    "mode": dc_obj.mode,
+                    "blocked": hard_block,
+                }
+                return (not hard_block), warning, violation_details
+        elif allowed_dimensions and dimension not in allowed_dimensions:
             warning = f"Dimension {dimension} not in allowed {allowed_dimensions} - potential Type-1 bug"
             print(f"[Agent 3] L1 Warning: {warning}")
             logger.info("[Agent 3] L1 Gating | Case %s | dimension=%s | result=WARNING: %s", case_id, dimension, warning)
-            return True, warning
+            hard_block = self._is_l1_hard_block_enabled()
+            violation_details = {
+                "violation_type": "dimension_out_of_range",
+                "actual_value": dimension,
+                "expected_range": allowed_dimensions,
+                "severity": "hard" if hard_block else "soft",
+                "mode": "legacy_list",
+                "blocked": hard_block,
+            }
+            return (not hard_block), warning, violation_details
 
         # 2. Check metric_type - must be in supported_metrics
         supported_metrics = l1_contract.get("supported_metrics", [])
@@ -101,7 +163,13 @@ class ExecutionGatingAgent:
                 warning = f"metric_type '{metric_type}' not in supported {supported_metrics} - potential Type-1 bug"
                 print(f"[Agent 3] L1 Warning: {warning}")
                 logger.info("[Agent 3] L1 Gating | Case %s | metric_type=%s | result=WARNING: %s", case_id, metric_type, warning)
-                return True, warning
+                violation_details = {
+                    "violation_type": "invalid_metric_type",
+                    "actual_value": metric_type,
+                    "expected_range": supported_metrics,
+                    "severity": "soft"
+                }
+                return True, warning, violation_details
 
         # 3. Check top_k - must not exceed max_top_k
         max_top_k = l1_contract.get("max_top_k", None)
@@ -111,10 +179,18 @@ class ExecutionGatingAgent:
                 warning = f"top_k {top_k} exceeds max_top_k {max_top_k} - potential Type-1 bug"
                 print(f"[Agent 3] L1 Warning: {warning}")
                 logger.info("[Agent 3] L1 Gating | Case %s | top_k=%s | result=WARNING: %s", case_id, top_k, warning)
-                return True, warning
+                hard_block = self._is_l1_hard_block_enabled()
+                violation_details = {
+                    "violation_type": "top_k_exceeds_limit",
+                    "actual_value": int(top_k),
+                    "expected_range": f"<= {max_top_k}",
+                    "severity": "hard" if hard_block else "soft",
+                    "blocked": hard_block,
+                }
+                return (not hard_block), warning, violation_details
 
         logger.info("[Agent 3] L1 Gating | Case %s | PASSED all checks", case_id)
-        return True, None
+        return True, None, None
 
     def _l2_gating(self, tc: TestCase, state: WorkflowState) -> tuple[bool, Optional[str]]:
         """
@@ -160,7 +236,7 @@ class ExecutionGatingAgent:
         query_text = tc.get('query_text') if is_dict else tc.query_text
 
         # 1. L1 Interception: Contract validation
-        l1_passed, l1_warning = self._l1_gating(tc, state)
+        l1_passed, l1_warning, l1_violation_details = self._l1_gating(tc, state)
 
         # 2. L2 Gating: Runtime readiness check
         l2_passed_detail, l2_reason = self._l2_gating(tc, state)
@@ -169,8 +245,6 @@ class ExecutionGatingAgent:
             "reason": l2_reason
         }
 
-        is_negative_test = tc.get('is_negative_test', False) if is_dict else getattr(tc, 'is_negative_test', False)
-
         error_msg = None
         raw_resp = None
         success = False
@@ -178,8 +252,8 @@ class ExecutionGatingAgent:
         underlying_logs = None
         l1_illegal_success = False
 
-        if not l1_passed and not is_negative_test:
-            error_msg = "L1 Gating Failed: Illegal dimensions or parameters."
+        if not l1_passed:
+            error_msg = f"L1 Hard Blocked: {l1_warning or 'Illegal dimensions or parameters.'}"
         elif not l2_ready:
             error_msg = "L2 Gating Failed: Database not ready or disconnected."
         elif not l2_passed_detail:
@@ -215,7 +289,15 @@ class ExecutionGatingAgent:
                     
                     # WBS 2.1: Use Docker Probe on failure
                     print(f"[Agent 3] Case {case_id} failed. Fetching deep observability logs...")
-                    probe = DockerLogsProbe(container_name="milvus-standalone")
+                    db_type = state.db_config.db_name.lower() if state.db_config and state.db_config.db_name else "unknown"
+                    db_lower = db_type.lower() if db_type else ""
+                    if 'qdrant' in db_lower:
+                        probe_container = 'qdrant'
+                    elif 'weaviate' in db_lower:
+                        probe_container = 'weaviate'
+                    else:
+                        probe_container = 'milvus-standalone'
+                    probe = DockerLogsProbe(container_name=probe_container)
                     underlying_logs = probe.fetch_recent_logs(tail=50)
 
                     # WBS 3.0: Adaptive Contract Evolution
@@ -248,10 +330,15 @@ class ExecutionGatingAgent:
                     if new_constraints and state.contracts and hasattr(state.contracts, 'l1_api'):
                         print(f"[Agent 3] Hot-patching L1 contract with new rules (from unexpected error).")
                         state.contracts.l1_api.update(new_constraints)
-                except:
-                    pass
+                except Exception as refine_exc:
+                    logger.exception(
+                        "[Agent 3] Failed to refine contract for case_id=%s after execution error: %s",
+                        case_id,
+                        refine_exc
+                    )
 
-        print(f"[Agent 3] Executed Case {case_id} | Success: {success} | Time: {exec_time:.2f}ms | L1={'WARN' if l1_warning else 'OK'} | L2={'FAIL' if not l2_passed_detail else 'OK'}")
+        l1_status = "FAIL" if not l1_passed else ("WARN" if l1_warning else "OK")
+        print(f"[Agent 3] Executed Case {case_id} | Success: {success} | Time: {exec_time:.2f}ms | L1={l1_status} | L2={'FAIL' if not l2_passed_detail else 'OK'}")
 
         return ExecutionResult(
             case_id=case_id,
@@ -263,7 +350,8 @@ class ExecutionGatingAgent:
             execution_time_ms=exec_time,
             underlying_logs=underlying_logs,
             l1_warning=l1_warning,
-            l2_result=l2_result_dict
+            l2_result=l2_result_dict,
+            l1_violation_details=l1_violation_details
         )
 
     def execute(self, state: WorkflowState) -> WorkflowState:
@@ -276,8 +364,13 @@ class ExecutionGatingAgent:
             
         # Initialize Adapter
         adapter = None
-        if db_config.db_name.lower() == "milvus":
+        db_name_lower = db_config.db_name.lower() if db_config and db_config.db_name else ""
+        if db_name_lower == "milvus":
             adapter = MilvusAdapter(endpoint=db_config.endpoint)
+        elif db_name_lower == "qdrant":
+            adapter = QdrantAdapter(endpoint=db_config.endpoint)
+        elif db_name_lower == "weaviate":
+            adapter = WeaviateAdapter(endpoint=db_config.endpoint)
         else:
             print(f"[Agent 3] Unsupported DB adapter: {db_config.db_name}")
             return state
@@ -304,9 +397,15 @@ class ExecutionGatingAgent:
             # Fix: Ensure dimension is an integer and within reasonable bounds for initialization
             try:
                 test_dim = int(test_dim)
-                if test_dim > 32768: # Milvus hard limit
-                    test_dim = 128
-            except:
+                dim_limit = 32768  # default fallback
+                l1_api = state.contracts.l1_api if hasattr(state.contracts, 'l1_api') else state.contracts.get('l1_api', {})
+                dc_from_contract = l1_api.get("dimension_constraint")
+                if dc_from_contract and isinstance(dc_from_contract, dict) and dc_from_contract.get("max"):
+                    dim_limit = dc_from_contract["max"]
+                if test_dim > dim_limit:
+                    test_dim = int(dc_from_contract.get("min", 128)) if dc_from_contract and isinstance(dc_from_contract, dict) and dc_from_contract.get("min") else 128
+            except Exception as e:
+                logger.warning("[Agent 3] Invalid test_dim=%r, fallback to 128: %s", test_dim, e)
                 test_dim = 128
                  
             # v2.1 Software Harness: Use setup_harness hook

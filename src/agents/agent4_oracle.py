@@ -81,6 +81,93 @@ Respond with structured JSON.
             
         return anomalies
 
+    def _traditional_oracle_check_enhanced(self, test_case, raw_response: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        """
+        Enhanced traditional oracle with multi-property validation.
+
+        Checks:
+        1. Distance monotonicity (existing)
+        2. Result count consistency with top_k
+        3. Vector dimension consistency
+        4. Metric type vs distance range correspondence
+        5. Distance value validity (no NaN/Inf)
+        """
+        import math
+
+        anomalies = []
+
+        # Start with existing monotonicity check
+        anomalies.extend(self._traditional_oracle_check(raw_response))
+
+        if not raw_response or len(raw_response) <= 1:
+            return anomalies
+
+        # --- NEW CHECK 2: Result count consistency ---
+        is_tc_dict = isinstance(test_case, dict)
+        top_k = test_case.get('top_k') if is_tc_dict else getattr(test_case, 'top_k', None)
+        if top_k is not None:
+            expected_count = int(top_k)
+            actual_count = len(raw_response)
+            if actual_count != expected_count and actual_count > 0:
+                anomalies.append({
+                    "type": "count_mismatch",
+                    "description": f"Expected {expected_count} results (top_k={top_k}), got {actual_count}"
+                })
+
+        # --- NEW CHECK 3: Vector dimension consistency ---
+        dimension = test_case.get('dimension') if is_tc_dict else getattr(test_case, 'dimension', None)
+        if dimension and raw_response:
+            first_hit = raw_response[0]
+            vector = first_hit.get("vector") if isinstance(first_hit, dict) else None
+            if vector and len(vector) > 0 and len(vector) != int(dimension):
+                anomalies.append({
+                    "type": "dimension_mismatch",
+                    "description": f"Vector dimension mismatch: expected {dimension}, got {len(vector)}"
+                })
+
+        # --- NEW CHECK 4: Metric type vs distance range ---
+        metric_type = test_case.get('metric_type') if is_tc_dict else getattr(test_case, 'metric_type', None)
+        distances = [hit.get("distance", 0) for hit in raw_response if isinstance(hit, dict)]
+
+        if metric_type and distances:
+            metric_lower = str(metric_type).upper()
+            if metric_lower in ("L2", "L2_SQUARED", "EUCLIDEAN"):
+                neg_distances = [d for d in distances if isinstance(d, (int, float)) and d < 0]
+                if neg_distances:
+                    anomalies.append({
+                        "type": "metric_range_violation",
+                        "description": f"L2 distance should be non-negative, found negative values: {neg_distances[:3]}"
+                    })
+            elif metric_lower in ("COSINE", "IP", "INNER_PRODUCT", "DOT"):
+                out_of_range = [d for d in distances if isinstance(d, (int, float)) and (d > 1.0 or d < -1.0)]
+                if out_of_range:
+                    anomalies.append({
+                        "type": "metric_range_violation",
+                        "description": f"Cosine/IP distance should be in [-1, 1], found out-of-range values: {out_of_range[:3]}"
+                    })
+
+        # --- NEW CHECK 5: Distance value validity ---
+        invalid_distances = []
+        for i, hit in enumerate(raw_response):
+            if not isinstance(hit, dict):
+                continue
+            d = hit.get("distance")
+            if d is not None:
+                try:
+                    f = float(d)
+                    if math.isnan(f) or math.isinf(f):
+                        invalid_distances.append((i, d))
+                except (ValueError, TypeError):
+                    invalid_distances.append((i, d))
+
+        if invalid_distances:
+            anomalies.append({
+                "type": "distance_invalid",
+                "description": f"Invalid distance values (NaN/Inf/non-numeric) at indices: {[x[0] for x in invalid_distances[:5]]}"
+            })
+
+        return anomalies
+
     def _evaluate_single_case(self, exec_res, tc_map, state):
         is_dict_res = isinstance(exec_res, dict)
         case_id = exec_res.get("case_id") if is_dict_res else exec_res.case_id
@@ -101,7 +188,7 @@ Respond with structured JSON.
         # 1. Traditional Check
         traditional_anomalies = []
         if success and raw_response:
-            traditional_anomalies = self._traditional_oracle_check(raw_response)
+            traditional_anomalies = self._traditional_oracle_check_enhanced(tc, raw_response)
             
         # Simple heuristic before LLM:
         if not expected_l1 and success:

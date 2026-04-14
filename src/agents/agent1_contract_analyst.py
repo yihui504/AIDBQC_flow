@@ -17,8 +17,8 @@ class L1Contract(BaseModel):
     max_top_k: int = Field(description="Maximum allowed value for top_k parameter")
     max_collection_name_length: int = Field(default=255, description="Maximum allowed length for collection names")
     max_payload_size_bytes: int = Field(default=65535, description="Maximum payload size in bytes")
-    supported_index_types: List[str] = Field(default=["HNSW", "IVF_FLAT", "FLAT"], description="Supported indexing algorithms")
-    state_constraints: List[str] = Field(default=["collection_exists", "index_loaded"], description="Pre-conditions for execution (e.g., collection must exist, index must be loaded)")
+    supported_index_types: List[str] = Field(default=["hnsw", "ivf_flat", "flat"], description="Supported indexing algorithms (lowercase, database-agnostic names)")
+    state_constraints: List[str] = Field(default=["collection_exists", "data_ready"], description="Pre-conditions for execution (database-agnostic: collection must exist, data/index must be ready)")
     source_urls: Dict[str, str] = Field(default_factory=dict)
     exhaustive_constraints: Dict[str, Any] = Field(default_factory=dict)
 
@@ -172,6 +172,17 @@ IMPORTANT: The pre-extracted constraints below are your PRIMARY source of truth 
 {structured_context}
 
 ### Deep Exhaustive Extraction
+### Dimension Constraint Extraction Rule (CRITICAL):
+When extracting dimension-related constraints, you MUST determine the constraint MODE from the documentation:
+- If docs explicitly enumerate specific allowed dimensions (e.g., "must be one of: 64, 128, 256...")
+  -> Set `dimension_constraint`: {{"mode": "list", "values": [64, 128, 256, ...]}}
+- If docs specify a min/max range (e.g., "dimension must be between 2 and 32768")
+  -> Set `dimension_constraint`: {{"mode": "range", "min": 2, "max": 32768}}
+- If docs mention commonly used dimensions but don't enforce strict limits
+  -> Use mode="range" with the documented bounds as min/max
+- ALWAYS populate the source_urls entry for the dimension constraint rule
+- Also populate the legacy `allowed_dimensions` field as a representative sample for backward compatibility
+
 - **L1 API Contracts**: Perform "Deep Exhaustive Extraction" of all API parameters found in `structured_context`. Extract every single parameter, limit, and constraint listed. Populate `exhaustive_constraints` with any additional parameters not covered by the main L1 fields.
 - **Operational Sequences & State Transitions (L2)**: Identify mandatory sequences of operations (e.g., "must call load() before search()") and state transitions (e.g., "index state moves from 'creating' to 'ready'"). Populate `operational_sequences` and `state_transitions` in the L2 contract.
 - **Source Tracking**: For EVERY extracted rule or constraint, you MUST populate the `source_urls` dictionary (in L1, L2, and L3) mapping the rule name or parameter name to its corresponding `source_url` provided in the `APIConstraint` objects within `structured_context`. If a rule comes from the raw text, use the URL associated with that section of documentation.
@@ -183,7 +194,7 @@ IMPORTANT: The pre-extracted constraints below are your PRIMARY source of truth 
 
 ### Output Requirement
 Your output MUST be a valid JSON object with exactly the following keys at the top level: "l1", "l2", "l3".
-- "l1" MUST have keys: "allowed_dimensions" (list), "supported_metrics" (list), "max_top_k" (int), "max_collection_name_length" (int), "max_payload_size_bytes" (int), "supported_index_types" (list), "state_constraints" (list), "source_urls" (dict), "exhaustive_constraints" (dict).
+- "l1" MUST have keys: "allowed_dimensions" (list), "dimension_constraint" (dict containing a `mode` field of "list" or "range", plus either `values` list or `min`/`max` ints), "supported_metrics" (list), "max_top_k" (int), "max_collection_name_length" (int), "max_payload_size_bytes" (int), "supported_index_types" (list), "state_constraints" (list), "source_urls" (dict), "exhaustive_constraints" (dict).
 - "l2" MUST have keys: "expected_monotonicity" (bool), "expected_consistency" (bool), "expected_strictness" (bool), "semantic_threshold_hint" (float), "query_intent_types" (list), "source_urls" (dict), "operational_sequences" (list of dicts), "state_transitions" (list of dicts).
 - "l3" MUST have keys: "scenario_name" (str), "scoring_rubrics" (list of {{"rule": str, "weight": float}}), "context_constraints" ({{"domain": str, "user_intent": str, "vector_types": list, "metadata_fields": list}}), "source_urls" (dict).
 

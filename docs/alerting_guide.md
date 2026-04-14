@@ -22,6 +22,19 @@ The AI-DB-QC Alerting system provides multi-channel notifications for test execu
 
 ## Quick Start
 
+### Runtime Monitoring Script (Task4/Task5)
+
+Use the built-in runtime monitor to collect CPU/memory/network/log/exception-stack signals and trigger interrupt alerts only when threshold breaches are consecutive:
+
+```bash
+python scripts/realtime_monitor.py --interval 5 --cpu-threshold 85 --mem-threshold 85 --net-threshold 100 --warmup-seconds 30 --consecutive-breach-threshold 3
+```
+
+- Metric stream: `.trae/runs/monitoring/realtime_metrics_*.jsonl`
+- Alert snapshots (interrupt alerts): `.trae/runs/monitor_alerts/alert_snapshot_*.json`
+- `warmup_seconds`: ignore breaches during startup/doc-fetch burst window
+- `consecutive_breach_threshold`: only trigger interrupt alert when breaches happen continuously
+
 ### Basic Usage
 
 ```python

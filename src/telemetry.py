@@ -34,6 +34,26 @@ class JSONLFormatter(logging.Formatter):
         except Exception:
             return ""
 
+class _CloseOnEmitRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """
+    RotatingFileHandler variant that closes the underlying file handle after each emit.
+
+    This is important on Windows where an open file handle prevents the temp directory
+    from being deleted during unit test teardown.
+    """
+
+    def emit(self, record):
+        try:
+            super().emit(record)
+        finally:
+            try:
+                if getattr(self, "stream", None):
+                    self.stream.close()
+                    self.stream = None
+            except Exception:
+                # Best-effort: never let telemetry crash caller/tests
+                pass
+
 
 class TelemetryManager:
     """
@@ -42,37 +62,58 @@ class TelemetryManager:
     
     def __init__(
         self,
-        log_dir: str = None,
+        # Keep the default as a *relative* path to match unit test expectations.
+        # File-system operations use a normalized absolute variant internally.
+        log_dir: str = ".trae/runs",
         filename: str = "telemetry.jsonl",
         async_enabled: bool = False,
         max_file_size_mb: int = 50,
-        backup_count: int = 10
+        backup_count: int = 10,
+        # Telemetry should be best-effort and must not crash the application on init failures
+        # (e.g., read-only working dirs in CI). When strict_init=True, exceptions are raised.
+        strict_init: bool = False,
     ):
-        if log_dir is None:
-            log_dir = os.path.join(os.getcwd(), ".trae", "runs")
-        self.log_dir = os.path.abspath(log_dir)
+        if not log_dir:
+            log_dir = ".trae/runs"
+        # Preserve the user-provided/default string for compatibility with tests and callers.
+        self.log_dir = log_dir
+        # Use a normalized absolute directory for file-system operations.
+        self._log_dir_fs = os.path.abspath(os.path.normpath(log_dir))
         self.filename = filename
-        self.filepath = os.path.join(self.log_dir, self.filename)
+        self.filepath = os.path.join(self._log_dir_fs, self.filename)
         self.async_enabled = async_enabled
         self.max_file_size_mb = max_file_size_mb
         self.backup_count = backup_count
         self._initialized = False
         
         try:
-            os.makedirs(self.log_dir, exist_ok=True)
+            os.makedirs(self._log_dir_fs, exist_ok=True)
             self._setup_logging()
             self._initialized = True
         except Exception as e:
-            print(f"[Telemetry Error] Failed to initialize telemetry: {e}")
-            raise
+            # Best-effort telemetry: keep process alive even if telemetry cannot initialize.
+            print(f"[Telemetry Error] Failed to initialize telemetry (dir={self._log_dir_fs}): {e}")
+            self._setup_null_logging()
+            self._initialized = False
+            if strict_init:
+                raise
         
         atexit.register(self.shutdown)
+    
+    def _setup_null_logging(self):
+        """Fallback logger that drops events when telemetry cannot initialize."""
+        self.logger = logging.getLogger(f"telemetry_{id(self)}")
+        self.logger.setLevel(logging.INFO)
+        self.logger.handlers.clear()
+        self.logger.propagate = False
+        self.logger.addHandler(logging.NullHandler())
     
     def _setup_logging(self):
         """Setup logging handlers based on configuration."""
         # Create logger
         self.logger = logging.getLogger(f"telemetry_{id(self)}")
         self.logger.setLevel(logging.INFO)
+        self.logger.propagate = False
         
         # Clear existing handlers
         self.logger.handlers.clear()
@@ -108,12 +149,13 @@ class TelemetryManager:
     def _create_rotating_file_handler(self):
         """Create a rotating file handler with custom naming."""
         try:
-            file_handler = logging.handlers.RotatingFileHandler(
+            file_handler = _CloseOnEmitRotatingFileHandler(
                 filename=self.filepath,
                 mode='a',
                 maxBytes=self.max_file_size_mb * 1024 * 1024,
                 backupCount=self.backup_count,
-                encoding='utf-8'
+                encoding='utf-8',
+                delay=True,
             )
         except Exception as e:
             print(f"[Telemetry Error] Failed to create file handler at {self.filepath}: {e}")

@@ -1,0 +1,7 @@
+- [x] agent3_executor.py execute() 支持 QdrantAdapter 选择分支
+- [x] main.py target_db_input 指向 Qdrant
+- [x] config.yaml max_iterations 设为 3
+- [x] Qdrant Docker 容器在 localhost:6333 运行并可连接 (v1.17.0)
+- [x] main.py 端到端流水线在 Qdrant 上成功运行至少 3 轮 (exit_code=0, 646.3s)
+- [x] 运行过程中遇到的问题已修复 (DockerLogsProbe + Reflection Agent 共2个bug)
+- [x] 最终产出缺陷报告（Reflection Agent 成功输出 Summary + 2条 Learned Strategies 并保存到 KB）

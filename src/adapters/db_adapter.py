@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 class VectorDBAdapter(ABC):
     """Abstract Base Class for Vector Database Adapters."""
@@ -226,8 +229,13 @@ class MilvusAdapter(VectorDBAdapter):
 
             try:
                 utility.wait_for_loading_complete(collection_name, using=alias)
-            except:
-                pass
+            except Exception as e:
+                logger.warning(
+                    "[MilvusAdapter] wait_for_loading_complete failed for collection=%s alias=%s: %s",
+                    collection_name,
+                    alias,
+                    e
+                )
 
             # Adding a small delay to ensure data is visible for search
             import time
@@ -323,6 +331,438 @@ class MilvusAdapter(VectorDBAdapter):
                 "error": str(e)
             }
             # Record raw MilvusException details if available
+            if hasattr(e, 'code'):
+                error_data["code"] = e.code
+            if hasattr(e, 'message'):
+                error_data["message"] = e.message
+            return error_data
+
+
+# --- Weaviate Implementation ---
+class WeaviateAdapter(VectorDBAdapter):
+    """Adapter for Weaviate Vector Database."""
+
+    def __init__(self, endpoint: str):
+        self.endpoint = endpoint
+        if ":" not in endpoint:
+            raise ValueError(f"Invalid endpoint format '{endpoint}'. Expected 'host:port'.")
+        self.host, self.port = endpoint.split(":")
+
+        self.client = None
+        self.collection_pool = {}
+        self.is_connected = False
+        self.current_collection_name = None
+        self.current_collection_dim = None
+
+    def _lazy_init(self):
+        if not self.client:
+            try:
+                import weaviate
+                from weaviate.classes.config import Configure, Property, DataType
+                self.weaviate = weaviate
+                self.Configure = Configure
+                self.Property = Property
+                self.DataType = DataType
+            except ImportError as e:
+                raise ImportError(f"weaviate-client is not installed correctly: {e}")
+
+    def _get_metric_type(self, metric_type: str):
+        """Convert common metric names to Weaviate VectorDistances."""
+        from weaviate.classes.config import VectorDistances
+        metric_map = {
+            "cosine": VectorDistances.COSINE,
+            "l2": VectorDistances.L2_SQUARED,
+            "l2-squared": VectorDistances.L2_SQUARED,
+            "dot": VectorDistances.DOT,
+            "manhattan": VectorDistances.MANHATTAN,
+            "hamming": VectorDistances.HAMMING,
+        }
+        return metric_map.get(metric_type.lower(), VectorDistances.COSINE)
+
+    def connect(self) -> bool:
+        self._lazy_init()
+        if getattr(self, 'is_connected', False):
+            return True
+        try:
+            print(f"[WeaviateAdapter] Connecting to http://{self.host}:{self.port} (grpc_port=50051)...")
+            self.client = self.weaviate.WeaviateClient(
+                connection_params=self.weaviate.connect.ConnectionParams.from_url(
+                    url=f"http://{self.host}:{self.port}",
+                    grpc_port=50051
+                )
+            )
+            self.client.connect()
+            self.is_connected = True
+            print(f"[WeaviateAdapter] Connected successfully!")
+            return True
+        except Exception as e:
+            print(f"[WeaviateAdapter] Connection failed: {type(e).__name__}: {e}")
+            self.is_connected = False
+            return False
+
+    def disconnect(self):
+        if self.client:
+            self.client.close()
+
+    def initialize_collection(self, collection_name: str, dimension: int, metric_type: str = "L2") -> bool:
+        self._lazy_init()
+        try:
+            import time
+
+            if dimension in self.collection_pool:
+                reusable_name = self.collection_pool[dimension]
+                print(f"[WeaviateAdapter] Reusing pooled collection: {reusable_name} for dimension {dimension}")
+                self.current_collection_name = reusable_name
+                self.current_collection_dim = dimension
+                return True
+
+            safe_name = f"FuzzPoolDim{dimension}_{int(time.time())}"
+            print(f"[WeaviateAdapter] Creating pooled collection {safe_name}...")
+
+            vector_distance = self._get_metric_type(metric_type)
+
+            self.client.collections.create(
+                name=safe_name,
+                properties=[
+                    self.Property(name="payload", data_type=self.DataType.TEXT)
+                ],
+                vectorizer_config=self.Configure.Vectorizer.none(),
+                vector_index_config=self.Configure.VectorIndex.hnsw(
+                    distance_metric=vector_distance
+                )
+            )
+
+            time.sleep(1)
+            print(f"[WeaviateAdapter] Collection created")
+
+            collection = self.client.collections.get(safe_name)
+            ready = False
+            for i in range(5):
+                try:
+                    collection.data.insert(
+                        properties={"payload": "smoke_test"},
+                        vector=[0.1] * dimension
+                    )
+                    time.sleep(0.5)
+
+                    collection.query.near_vector(
+                        near_vector=[0.1] * dimension,
+                        limit=1
+                    )
+                    ready = True
+                    print(f"[WeaviateAdapter] Pool smoke test passed for {safe_name}")
+                    break
+                except Exception as e:
+                    print(f"[WeaviateAdapter] Pool smoke test retry {i} failed: {e}")
+                    time.sleep(2)
+
+            if ready:
+                self.collection_pool[dimension] = safe_name
+                self.current_collection_name = safe_name
+                self.current_collection_dim = dimension
+                print(f"[WeaviateAdapter] Collection pool updated: {self.collection_pool}")
+
+            return ready
+
+        except Exception as e:
+            print(f"[WeaviateAdapter] Failed to initialize pooled collection: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def insert_data(self, collection_name: str, vectors: List[List[float]], payloads: List[Dict[str, Any]]) -> bool:
+        self._lazy_init()
+        try:
+            import json
+            collection = self.client.collections.get(collection_name)
+
+            for v, p in zip(vectors, payloads):
+                payload_str = json.dumps(p)
+                collection.data.insert(
+                    properties={"payload": payload_str},
+                    vector=v
+                )
+
+            import time
+            time.sleep(1)
+            return True
+        except Exception as e:
+            print(f"[WeaviateAdapter] Failed to insert data: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def setup_harness(self, collection_name: str, dimension: int, metric_type: str = "L2") -> bool:
+        print(f"[Harness] Setting up environment for collection: {collection_name}")
+        success = self.initialize_collection(collection_name, dimension, metric_type)
+        return success
+
+    def teardown_harness(self, collection_name: str) -> bool:
+        self._lazy_init()
+        is_pooled = any(name == collection_name for name in self.collection_pool.values())
+
+        if is_pooled:
+            print(f"[Harness] Skipping teardown for pooled collection: {collection_name}")
+            return True
+
+        print(f"[Harness] Tearing down non-pooled environment for collection: {collection_name}")
+        try:
+            self.client.collections.delete(collection_name)
+            return True
+        except Exception as e:
+            print(f"[Harness] Failed to teardown collection: {e}")
+            return False
+
+    async def search_async(self, collection_name: str, query_vector: List[float], top_k: int = 10, metric_type: str = "L2") -> Dict[str, Any]:
+        import asyncio
+        return await asyncio.to_thread(self._search_sync, collection_name, query_vector, top_k, metric_type)
+
+    def search(self, collection_name: str, query_vector: List[float], top_k: int = 10, metric_type: str = "L2") -> Dict[str, Any]:
+        return self._search_sync(collection_name, query_vector, top_k, metric_type)
+
+    def _search_sync(self, collection_name: str, query_vector: List[float], top_k: int = 10, metric_type: str = "L2") -> Dict[str, Any]:
+        self._lazy_init()
+        try:
+            print(f"[WeaviateAdapter] Search: vector_dim={len(query_vector)}, collection={collection_name}")
+
+            collection = self.client.collections.get(collection_name)
+            results = collection.query.near_vector(
+                near_vector=query_vector,
+                limit=top_k,
+                return_properties=["payload"],
+                return_metadata=["distance"]
+            )
+
+            hits = []
+            for obj in results.objects:
+                hits.append({
+                    "id": str(obj.uuid),
+                    "distance": obj.metadata.distance if hasattr(obj.metadata, 'distance') else None,
+                    "payload": obj.properties.get("payload")
+                })
+
+            return {
+                "success": True,
+                "hits": hits,
+                "error": None
+            }
+        except Exception as e:
+            error_data = {
+                "success": False,
+                "hits": [],
+                "error": str(e)
+            }
+            return error_data
+
+
+# --- Qdrant Implementation ---
+class QdrantAdapter(VectorDBAdapter):
+    """Adapter for Qdrant Vector Database."""
+    
+    def __init__(self, endpoint: str):
+        self.endpoint = endpoint
+        if ":" not in endpoint:
+            raise ValueError(f"Invalid endpoint format '{endpoint}'. Expected 'host:port'.")
+        self.host, self.port = endpoint.split(":")
+        
+        self.client = None
+        self.is_connected = False
+        self.collection_pool = {}
+        self.current_collection_name = None
+        self.current_collection_dim = None
+        
+    def _lazy_init(self):
+        if not self.client:
+            try:
+                from qdrant_client import QdrantClient
+                from qdrant_client.http.models import Distance, VectorParams, PointStruct
+                self.QdrantClient = QdrantClient
+                self.Distance = Distance
+                self.VectorParams = VectorParams
+                self.PointStruct = PointStruct
+            except ImportError as e:
+                raise ImportError(f"qdrant-client is not installed correctly: {e}")
+
+    def _metric_to_distance(self, metric_type: str):
+        metric_map = {
+            "L2": self.Distance.EUCLID,
+            "EUCLID": self.Distance.EUCLID,
+            "COSINE": self.Distance.COSINE,
+            "IP": self.Distance.DOT,
+            "DOT": self.Distance.DOT,
+        }
+        return metric_map.get(metric_type.upper(), self.Distance.COSINE)
+
+    def connect(self) -> bool:
+        self._lazy_init()
+        if getattr(self, 'is_connected', False):
+            return True
+        try:
+            self.client = self.QdrantClient(host=self.host, port=int(self.port))
+            self.client.get_collections()
+            self.is_connected = True
+            return True
+        except Exception as e:
+            print(f"[QdrantAdapter] Connection failed: {e}")
+            self.is_connected = False
+            return False
+
+    def disconnect(self):
+        if self.client:
+            self.client.close()
+            self.client = None
+            self.is_connected = False
+
+    def initialize_collection(self, collection_name: str, dimension: int, metric_type: str = "L2") -> bool:
+        self._lazy_init()
+        try:
+            import time
+            
+            if dimension in self.collection_pool:
+                reusable_name = self.collection_pool[dimension]
+                print(f"[QdrantAdapter] Reusing pooled collection: {reusable_name} for dimension {dimension}")
+                self.current_collection_name = reusable_name
+                self.current_collection_dim = dimension
+                return True
+            
+            safe_name = f"fuzz_pool_dim_{dimension}_{int(time.time())}"
+            print(f"[QdrantAdapter] Creating pooled collection {safe_name}...")
+            
+            distance = self._metric_to_distance(metric_type)
+            
+            self.client.create_collection(
+                collection_name=safe_name,
+                vectors_config=self.VectorParams(size=dimension, distance=distance)
+            )
+            
+            time.sleep(0.5)
+            
+            ready = False
+            for i in range(5):
+                try:
+                    self.client.upsert(
+                        collection_name=safe_name,
+                        points=[self.PointStruct(id=1, vector=[0.1] * dimension, payload={"test": "smoke"})]
+                    )
+                    
+                    self.client.search(
+                        collection_name=safe_name,
+                        query_vector=[0.1] * dimension,
+                        limit=1
+                    )
+                    ready = True
+                    print(f"[QdrantAdapter] Pool smoke test passed for {safe_name}")
+                    break
+                except Exception as e:
+                    print(f"[QdrantAdapter] Pool smoke test retry {i} failed: {e}")
+                    time.sleep(1)
+            
+            if ready:
+                self.collection_pool[dimension] = safe_name
+                self.current_collection_name = safe_name
+                self.current_collection_dim = dimension
+                print(f"[QdrantAdapter] Collection pool updated: {self.collection_pool}")
+            
+            return ready
+            
+        except Exception as e:
+            print(f"[QdrantAdapter] Failed to initialize pooled collection: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def insert_data(self, collection_name: str, vectors: List[List[float]], payloads: List[Dict[str, Any]]) -> bool:
+        self._lazy_init()
+        try:
+            import uuid
+            
+            dim = self.current_collection_dim or len(vectors[0])
+            
+            points = []
+            for i, (v, p) in enumerate(zip(vectors, payloads)):
+                vector = list(v)
+                if len(vector) < dim:
+                    vector.extend([0.0] * (dim - len(vector)))
+                elif len(vector) > dim:
+                    vector = vector[:dim]
+                
+                point = self.PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=vector,
+                    payload=p
+                )
+                points.append(point)
+            
+            self.client.upsert(collection_name=collection_name, points=points)
+            
+            import time
+            time.sleep(0.5)
+            return True
+        except Exception as e:
+            print(f"[QdrantAdapter] Failed to insert data: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def setup_harness(self, collection_name: str, dimension: int, metric_type: str = "L2") -> bool:
+        print(f"[Harness] Setting up environment for collection: {collection_name}")
+        success = self.initialize_collection(collection_name, dimension, metric_type)
+        return success
+
+    def teardown_harness(self, collection_name: str) -> bool:
+        self._lazy_init()
+        is_pooled = any(name == collection_name for name in self.collection_pool.values())
+        
+        if is_pooled:
+            print(f"[Harness] Skipping teardown for pooled collection: {collection_name}")
+            return True
+        
+        print(f"[Harness] Tearing down non-pooled environment for collection: {collection_name}")
+        try:
+            self.client.delete_collection(collection_name)
+            return True
+        except Exception as e:
+            print(f"[Harness] Failed to teardown collection: {e}")
+            return False
+
+    async def search_async(self, collection_name: str, query_vector: List[float], top_k: int = 10, metric_type: str = "L2") -> Dict[str, Any]:
+        import asyncio
+        return await asyncio.to_thread(self._search_sync, collection_name, query_vector, top_k, metric_type)
+
+    def search(self, collection_name: str, query_vector: List[float], top_k: int = 10, metric_type: str = "L2") -> Dict[str, Any]:
+        return self._search_sync(collection_name, query_vector, top_k, metric_type)
+
+    def _search_sync(self, collection_name: str, query_vector: List[float], top_k: int = 10, metric_type: str = "L2") -> Dict[str, Any]:
+        self._lazy_init()
+        try:
+            print(f"[QdrantAdapter] Search: vector_dim={len(query_vector)}, collection={collection_name}")
+            
+            results = self.client.search(
+                collection_name=collection_name,
+                query_vector=query_vector,
+                limit=top_k,
+                with_payload=True
+            )
+            
+            hits = []
+            for hit in results:
+                hits.append({
+                    "id": hit.id,
+                    "distance": hit.score,
+                    "payload": hit.payload
+                })
+            
+            return {
+                "success": True,
+                "hits": hits,
+                "error": None
+            }
+        except Exception as e:
+            error_data = {
+                "success": False,
+                "hits": [],
+                "error": str(e)
+            }
             if hasattr(e, 'code'):
                 error_data["code"] = e.code
             if hasattr(e, 'message'):

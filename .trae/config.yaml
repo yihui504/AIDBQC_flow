@@ -21,13 +21,35 @@ logging:
   backup_count: 10
 
 isolated_mre:
-  enabled: false
+  enabled: true
   timeout_seconds: 30
   image: "python:3.11-slim"
 
 harness:
   max_token_budget: 1000000
   max_iterations: 4
+  target_db_input: "Qdrant v1.17.1"
+  from_scratch: true
+
+run_guard:
+  enabled: true
+  enforce_weaviate_1369: true
+  enforce_max_iterations_4: true
+  forbidden_terms:
+    - "degraded"
+    - "fallback"
+    - "simulate"
+    - "simulation"
+    - "mock"
+    - "fake"
+    - "降级"
+    - "替代"
+    - "模拟"
+
+agent3:
+  # 默认对非法 dimension/top_k 执行 L1 硬阻断
+  # 可通过环境变量 AI_DB_QC_AGENT3_L1_HARD_BLOCK_ILLEGAL_PARAMS 覆盖
+  l1_hard_block_illegal_params: true
 
 rate_limiting:
   enabled: true
@@ -35,5 +57,28 @@ rate_limiting:
   wait_on_limit: true
 
 docs:
-  source: "local_jsonl"
-  local_jsonl_path: ".trae/cache/milvus_io_docs_depth3.jsonl"
+  source: "crawl"
+  local_jsonl_path: ".trae/cache/{db_name}_io_docs_depth3.jsonl"
+  cache_ttl_days: 7
+
+critical_error_handler:
+  enabled: true
+  log_dir: ".trae/logs"
+  state_dir: ".trae/runs"
+  enable_auto_cleanup: true
+  max_shutdown_time_seconds: 30
+  log_critical_errors: true
+
+docker_port_manager:
+  enabled: true
+  state_dir: ".trae/port_manager"
+  enable_auto_cleanup: true
+  cleanup_interval_seconds: 300
+  orphan_timeout_minutes: 60
+  port_ranges:
+    milvus: [19530, 19600]
+    qdrant: [6333, 6400]
+    weaviate: [8080, 8150]
+    chroma: [8000, 8050]
+    general: [9000, 9500]
+    monitoring: [3000, 3050]

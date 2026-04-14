@@ -1,0 +1,14 @@
+- [x] Qdrant v1.17.1 Docker 容器启动成功，API 可达（localhost:6333）
+- [x] config.yaml target_db_input 已切换为 Qdrant v1.17.1
+- [x] 旧 Docker 网络/容器已清理
+- [x] Agent 0 正确识别目标为 Qdrant 并成功爬取文档（Cache HIT: 332 docs）
+- [x] Agent 3 使用 QdrantAdapter 成功连接并执行搜索（真实 Qdrant API 调用）
+- [x] 流水线完成 4 轮迭代后以 exit code 0 退出（Run #6, run_4b1a4ec6, ~34min）
+- [x] 运行过程中无死循环、无无限重试、无资源泄漏（LLM 缓存修复后稳定运行 >34min）
+- [x] 产出 GitHub_Issue_*.md 文件：**35 个**
+- [x] Issue 文件 Environment 字段显示 "Qdrant version: qdrant 1.17.1"（非 Milvus/Weaviate）✅
+- [x] Issue 文件包含完整 MRE Python 代码（qdrant-client SDK: QdrantClient, VectorParams, PointStruct）✅
+- [x] Issue 文件 Evidence & Documentation 完整有效（Violated Contract Type + Reference URL + Verification Status）✅
+- [x] Bug 分类准确（Type-1/2/3/4 四类缺陷均有覆盖）✅
+- [x] tasks.md 所有任务标记完成
+- [x] checklist.md 所有检查点已勾选

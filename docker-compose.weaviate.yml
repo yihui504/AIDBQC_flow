@@ -1,0 +1,16 @@
+version: '3.8'
+services:
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.36.9
+    ports:
+      - "127.0.0.1:8081:8080"
+      - "127.0.0.1:50051:50051"
+    environment:
+      - QUERY_DEFAULTS_LIMIT=25
+      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=false
+      - PERSISTENCE_DATA_PATH=/var/lib/weaviate
+      - DEFAULT_VECTORIZER_MODULE=none
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+volumes:
+  weaviate_data:

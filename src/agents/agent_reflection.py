@@ -73,19 +73,24 @@ Output a JSON object with keys: summary (string), new_strategies (string), and s
             reflection, tokens_used = _invoke_with_retry()
             state.total_tokens_used += tokens_used
             
+            def _get_attr(obj, key, default=None):
+                if isinstance(obj, dict):
+                    return obj.get(key, default)
+                return getattr(obj, key, default)
+            
             if reflection is None:
                 print("[Reflection Agent] Reflection returned None. Skipping summary output.")
                 print("[Reflection Agent] No strategies learned from this run.")
             else:
-                print(f"[Reflection Agent] Summary: {reflection.summary}")
-                print(f"[Reflection Agent] Learned Strategies: {reflection.new_strategies}")
+                print(f"[Reflection Agent] Summary: {_get_attr(reflection, 'summary')}")
+                print(f"[Reflection Agent] Learned Strategies: {_get_attr(reflection, 'new_strategies')}")
                 
-                if reflection.save_to_kb:
+                if _get_attr(reflection, 'save_to_kb', False):
                     # Save meta-strategy to KB as a special bug record
                     meta_record = BugRecord(
                         case_id=f"META_STRATEGY_{state.run_id[:8]}",
                         bug_type="Meta-Strategy",
-                        root_cause_analysis=reflection.new_strategies,
+                        root_cause_analysis=_get_attr(reflection, 'new_strategies', ''),
                         evidence_level="L3"
                     )
                     self.kb.add_defect(meta_record)

@@ -1,0 +1,47 @@
+# Cross-Database Test Configuration
+# This file defines test configurations for different vector databases
+
+databases:
+  milvus:
+    adapter_class: "MilvusAdapter"
+    endpoint: "localhost:19530"
+    docker_compose: "docker-compose.milvus.yml"
+    contract_defaults: "MilvusContractDefaults"
+    health_check_port: 19530
+    startup_timeout: 60
+    
+  qdrant:
+    adapter_class: "QdrantAdapter"
+    endpoint: "localhost:6333"
+    docker_compose: "docker-compose.qdrant.yml"
+    contract_defaults: "QdrantContractDefaults"
+    health_check_port: 6333
+    startup_timeout: 30
+    
+  weaviate:
+    adapter_class: "WeaviateAdapter"
+    endpoint: "localhost:8080"
+    docker_compose: "docker-compose.weaviate.yml"
+    contract_defaults: "WeaviateContractDefaults"
+    health_check_port: 8080
+    startup_timeout: 45
+
+test_suites:
+  basic_operations:
+    - connect_disconnect
+    - create_collection
+    - insert_vectors
+    - search_vectors
+    - teardown_collection
+    
+  edge_cases:
+    - invalid_dimension
+    - empty_collection_search
+    - large_batch_insert
+    - high_dimensional_vectors
+
+default_test_config:
+  dimension: 128
+  metric_type: "L2"
+  top_k: 10
+  num_test_vectors: 100

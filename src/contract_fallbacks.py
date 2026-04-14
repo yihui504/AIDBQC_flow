@@ -16,7 +16,7 @@ class MilvusContractDefaults:
     # L1 API Constraints
     allowed_dimensions: List[int] = None  # Will be set in __post_init__
     supported_metrics: List[str] = None   # Will be set in __post_init__
-    max_top_k: int = 16384
+    max_top_k: int = 16384  # Operational default; Milvus API has no strict upper bound on search limit
     max_collection_name_length: int = 255
     max_field_name_length: int = 128
     supported_index_types: List[str] = None  # Will be set in __post_init__
@@ -27,15 +27,18 @@ class MilvusContractDefaults:
     def __post_init__(self):
         if self.allowed_dimensions is None:
             self.allowed_dimensions = [
-                4, 8, 16, 32, 64, 96, 128, 192, 256, 384,
+                2, 4, 8, 16, 32, 64, 96, 128, 192, 256, 384,
                 512, 768, 960, 1024, 1200, 1536, 1792, 2048,
                 3072, 3584, 4096, 7168, 7680, 12288, 16384,
-                19968, 24576, 32768, 65536, 131072, 262144, 524288,
-                1048576, 2097152, 32768
+                19968, 24576, 32768
             ]
-        
+
+        self.dimension_constraint = {"mode": "range", "min": 2, "max": 32768}
+
         if self.supported_metrics is None:
-            self.supported_metrics = ["L2", "IP", "COSINE", "HAMMING", "JACCARD", "BM25"]
+            # Per Milvus docs: L2/IP/COSINE for float vectors, HAMMING/JACCARD/TANIMOTO for binary vectors
+            # BM25 is a full-text search metric (SPARSE_INVERTED_INDEX), NOT a vector distance metric
+            self.supported_metrics = ["L2", "IP", "COSINE", "HAMMING", "JACCARD", "TANIMOTO"]
         
         if self.supported_index_types is None:
             self.supported_index_types = [
@@ -54,9 +57,88 @@ class MilvusContractDefaults:
             ]
 
 
+@dataclass
+class QdrantContractDefaults:
+    """Qdrant-specific contract default values."""
+    
+    # L1 API Constraints
+    allowed_dimensions: List[int] = None  # Will be set in __post_init__
+    supported_metrics: List[str] = None   # Will be set in __post_init__
+    max_top_k: int = 10000  # Operational default; no strict doc limit
+    max_collection_name_length: int = 255
+    max_field_name_length: int = 128
+    supported_index_types: List[str] = None  # Will be set in __post_init__
+    
+    # L2 Semantic Constraints (common defaults)
+    operational_sequences: List[str] = None  # Will be set in __post_init__
+    
+    def __post_init__(self):
+        if self.allowed_dimensions is None:
+            self.allowed_dimensions = [
+                64, 128, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 8192
+            ]
+
+        self.dimension_constraint = {"mode": "range", "min": 1, "max": 65535}
+
+        if self.supported_metrics is None:
+            # Per Qdrant docs: https://qdrant.tech/documentation/concepts/search/#distance-metrics
+            self.supported_metrics = ["Cosine", "Euclid", "Dot"]
+        
+        if self.supported_index_types is None:
+            self.supported_index_types = ["HNSW", "Flat"]
+        
+        if self.operational_sequences is None:
+            self.operational_sequences = [
+                "create_collection -> upsert -> search",
+                "create_collection -> upsert -> scroll",
+                "create_collection -> upsert -> delete -> search",
+                "delete_collection -> search (should fail)",
+                "upsert -> search (without collection, should fail)"
+            ]
+
+
+@dataclass
+class WeaviateContractDefaults:
+    """Weaviate-specific contract default values."""
+
+    allowed_dimensions: List[int] = None
+    supported_metrics: List[str] = None
+    max_top_k: int = 10000  # Operational default; no strict doc limit
+    max_collection_name_length: int = 255
+    max_field_name_length: int = 128
+    supported_index_types: List[str] = None
+    operational_sequences: List[str] = None
+
+    def __post_init__(self):
+        if self.allowed_dimensions is None:
+            self.allowed_dimensions = [
+                128, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096
+            ]
+
+        self.dimension_constraint = {"mode": "range", "min": 1, "max": 65535}
+
+        if self.supported_metrics is None:
+            # Per Weaviate docs: https://weaviate.io/developers/weaviate/configurations/distances#available-distances
+            self.supported_metrics = ["cosine", "l2-squared", "dot", "manhattan", "hamming"]
+
+        if self.supported_index_types is None:
+            self.supported_index_types = ["hnsw", "flat"]
+
+        if self.operational_sequences is None:
+            self.operational_sequences = [
+                "create_collection -> insert -> search",
+                "create_collection -> insert -> near_vector -> search",
+                "create_collection -> batch_insert -> search",
+                "delete_collection -> search (should fail)",
+                "create_collection -> delete -> search (should fail)"
+            ]
+
+
 # Registry of fallback rules for different databases
 FALLBACK_REGISTRY: Dict[str, type] = {
     "milvus": MilvusContractDefaults,
+    "qdrant": QdrantContractDefaults,
+    "weaviate": WeaviateContractDefaults,
 }
 
 
@@ -112,6 +194,16 @@ def apply_fallbacks(contract_dict: dict, db_type: str) -> dict:
         fields_applied.append("allowed_dimensions")
     else:
         l1_updated["allowed_dimensions"] = l1.get("allowed_dimensions")
+
+    if not l1.get("dimension_constraint"):
+        fb_dc = getattr(fallbacks, 'dimension_constraint', None)
+        if fb_dc:
+            l1_updated["dimension_constraint"] = fb_dc
+            fields_applied.append("dimension_constraint")
+        else:
+            l1_updated["dimension_constraint"] = {"mode": "range", "min": 2, "max": 32768}
+    else:
+        l1_updated["dimension_constraint"] = l1.get("dimension_constraint")
 
     if not l1.get("supported_metrics"):
         l1_updated["supported_metrics"] = fallbacks.supported_metrics

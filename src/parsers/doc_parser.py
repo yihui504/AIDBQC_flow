@@ -346,7 +346,12 @@ class StructuredDocParser:
             import json
             data = json.loads(code_text)
             self._extract_from_json_schema(data, section_name, source_url)
-        except:
+        except Exception as e:
+            logger.debug(
+                "[StructuredDocParser] Code block is not valid JSON in section='%s', fallback to text extraction: %s",
+                section_name,
+                e
+            )
             self._extract_constraints_from_text(code_text, None, source_url, section_name)
 
     def _extract_from_json_schema(self, data: Any, section_name: str, source_url: Optional[str]) -> None:

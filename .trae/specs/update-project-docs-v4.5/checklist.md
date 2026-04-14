@@ -1,0 +1,12 @@
+- [x] README.md 版本号和验证数据与代码实际状态一致
+- [x] README.md 包含 Qdrant/Weaviate 数据库支持说明
+- [x] README.md 项目结构树与实际文件系统对齐（无多余/缺失模块）
+- [x] README.md 包含 alerting/dashboard/experiments/context/validators/defects/parsers/pools/docs 模块描述
+- [x] README.md 配置参考表覆盖 src/config.py 中所有主要配置类
+- [x] AGENTS.md 包含 Agent6 全部子组件描述（EmbeddingGenerator/IsolatedCodeRunner/ReferenceValidator/EnhancedDeduplicator）
+- [x] AGENTS.md 包含 Agent0 文档预处理流水线完整细节
+- [x] AGENTS.md 包含 Contract Fallback 三种数据库（Milvus/Qdrant/Weaviate）支持说明
+- [x] AGENTS.md 数据接口定义包含代码中实际存在的所有字段
+- [x] ROADMAP.md 中已实现功能（Qdrant/Weaviate 支持）标记为完成状态
+- [x] ROADMAP.md 各方向优先级反映真实开发状态
+- [x] 所有文档中的模块路径引用指向实际存在的文件

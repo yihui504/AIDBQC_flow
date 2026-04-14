@@ -90,6 +90,12 @@ Desktop.ini
 # Project Specific
 # ============================================================================
 .trae/runs/
+.trae/chroma_db/
 *.jsonl
 chroma_data/
 node_modules/
+venv_run/
+venv312/
+.omc/
+.claude/
+docs/superpowers/

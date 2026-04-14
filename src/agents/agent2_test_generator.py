@@ -71,6 +71,23 @@ Your task is to generate high-quality test cases based on the provided contracts
 6. **Coverage Diversity**: Aim for high coverage across different bug types, dimensions, and scenarios. Avoid repeating similar patterns.
 7. **Dimension Exploration**: Test dimensions beyond the allowed list (including dimensions that have never been tested before) as negative tests.
 8. **Hybrid Strategy**: Combine multiple strategies for comprehensive coverage. Each strategy should cover at least 2 test cases.
+9. **Type-1 Targeting (Contract Bypass Hunting)**: Generate test cases that explicitly violate L1 API contracts but are designed to SUCCEED execution (triggering Type-1 "Illegal Success" bugs). Focus on:
+    - Boundary dimensions: values just outside the allowed list but still technically valid (e.g., dim=3 when min is 4, or dim=32769 when max is 32768)
+    - Edge metric types: similar-but-wrong metric names that might be silently accepted
+    - Over-limit top_k: values slightly above max_top_k that the database might not strictly enforce
+    For these cases, set `expected_l1_legal: false` but design them so they might actually succeed.
+10. **Type-3 Targeting (Traditional Oracle Violation Hunting)**: Generate test cases that satisfy L1/L2 contracts but may violate traditional oracle properties. Focus on:
+    - Repeated identical queries: send the same query twice and check if results are consistent (idempotency)
+    - Empty result edge cases: queries that should return 0 results but might return garbage
+    - Distance boundary: queries where distances should be exactly at metric boundaries (e.g., cosine=1.0 for identical vectors)
+    - Large result sets: top_k near the upper limit to stress result count consistency
+    For these cases, set `expected_l1_legal: true` and include specific expected_ground_truth with distance values to validate.
+11. **In-Boundary Edge Case (IBSA)** [PRIORITY: HIGH — aim for 4+ cases]:
+Generate test cases where ALL L1/L2 parameters are fully legal per contract,
+but the operation reveals internal logic flaws or oracle violations.
+These are particularly valuable for databases with permissive SDKs (Qdrant, Weaviate)
+where out-of-boundary parameters get rejected before reaching the engine layer.
+Combine with Type-3 targeting strategies for maximum defect discovery.
 
 ### Distribution Requirement:
 At least 20% of the generated test cases MUST be negative tests (`is_negative_test: true`).
@@ -80,12 +97,30 @@ Negative tests should include:
 - **Chaotic sequences** (e.g., performing a search operation before the collection is created or data is inserted, violating the `operational_sequences`).
 - For negative tests, `expected_l1_legal` should likely be `false`.
 
+### In-Boundary Semantic Anomaly (IBSA) Quota:
+At least **30%** of generated test cases MUST be "In-Boundary Semantically Anomalous" (IBSA):
+- `dimension` IS within the allowed range (passes L1 gate)
+- `metric_type` IS a supported metric (passes L1 gate)
+- `top_k` IS within max_top_k limit (passes L1 gate)
+- Collection exists and data is loaded (passes L2 gate)
+- BUT the test exposes semantic or logic bugs:
+  - Idempotency violation: identical queries returning different results
+  - Distance boundary: cosine distance > 1.0 or L2 distance < 0 for valid vectors
+  - Count mismatch: requesting top_k=N returns != N results
+  - Metric range violation: IP distance outside [-1, 1], L2 distance < 0
+  - Filter strictness: filter condition incorrectly reduces/expands result set
+  - Semantic drift: query vector semantically unrelated but ranks highly
+  - Empty result edge: query that should return 0 results returns garbage
+- For IBSA cases: set `is_negative_test=false`, `expected_l1_legal=true`
+- These are your HIGHEST-VALUE cases for Type-3 and Type-4 defect detection,
+  especially on Qdrant and Weaviate where the SDK is more permissive than Milvus.
+
 ### Bug Type Coverage:
 Distribute tests across different bug types:
-- Type-1: L1 Crash/Error
-- Type-2: Poor diagnostics
-- Type-3: Application error
-- Type-4: Semantic violation/Contract violation
+- Type-1: L1 Contract Bypass (illegal request succeeds — database accepts what it should reject)
+- Type-2: Poor Diagnostics (failure with vague/unhelpful error message)
+- Type-3: Traditional Oracle Violation (passes all gates but fails property checks: monotonicity, dimension consistency, count mismatch, metric range)
+- Type-4: Semantic Violation / Contract Violation
 - Type-5: Data corruption
 - Type-6: Performance degradation
 - Type-7: Security vulnerability

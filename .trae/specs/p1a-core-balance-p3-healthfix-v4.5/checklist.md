@@ -1,0 +1,12 @@
+- [x] ExecutionResult 新增 l1_violation_details 字段且类型为 Optional[Dict]
+- [x] Agent3 _l1_gating() 返回结构化违规详情（violation_type + actual_value + expected_range + severity）
+- [x] Agent5 classify_defect_v2() 能正确分类 Type-1（hard-severity 违规 + exec_success）
+- [x] Agent5 classify_defect_v2() 新增 Type-3 路径（传统预言机异常时正确分类）
+- [x] Agent4 传统预言机新增 4 项检查（结果数/维度/metric范围/distance合法性）
+- [x] Agent4 _evaluate_single_case() 调用增强版传统预言机
+- [x] Agent2 prompt 包含 Strategy 9（Type-1 Hunting）和 Strategy 10（Type-3 Hunting）
+- [x] Agent5 DockerLogsProbe 容器名从 state.db_config 动态获取（非硬编码 milvus-standalone）
+- [x] dashboard/app.py 删除无效的 src.roadmap 导入，替换为直接数据读取
+- [x] dashboard/app.py 无 ImportError 能正常启动
+- [x] AGENTS.md 版本号更新为 v4.5
+- [x] 所有修改文件无语法错误（Python import 正常）

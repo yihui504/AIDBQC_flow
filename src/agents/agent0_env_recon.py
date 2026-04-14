@@ -4,6 +4,7 @@ import yaml
 import asyncio
 import json
 import hashlib
+import secrets
 import logging
 import re
 from typing import Dict, Any, Tuple, List, Optional
@@ -19,10 +20,10 @@ from src.config import ConfigLoader
 from src.rate_limiter import global_llm_rate_limiter
 from src.docs.local_docs_library import LocalDocsLibrary
 from langchain_community.callbacks.manager import get_openai_callback
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
-from crawl4ai.deep_crawling import BFSDeepCrawlStrategy, DomainFilter, FilterChain
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin, urlsplit, urlunsplit
+from collections import deque
 import time
+from types import SimpleNamespace
 
 logger = logging.getLogger(__name__)
 
@@ -316,7 +317,8 @@ class DeepCrawler:
             "clickhouse": "https://clickhouse.com/docs/en/"
         }
         return docs_mapping.get(db_name.lower())
-    
+
+
     async def deep_crawl(self, start_url: str, db_name: str) -> Tuple[str, Dict[str, Any]]:
         """
         执行深度递归爬取
@@ -328,20 +330,32 @@ class DeepCrawler:
         Returns:
             Tuple[markdown_content, crawl_stats]
         """
+        import tempfile
+        import os
+        crawl_base_dir = tempfile.mkdtemp(prefix="crawl4ai_")
+        user_data_dir = tempfile.mkdtemp(prefix="crawl4ai_browser_")
+        
+        # 设置环境变量以使用临时目录 (MUST BE SET BEFORE IMPORTING CRAWL4AI)
+        os.environ["CRAWL4_AI_BASE_DIRECTORY"] = crawl_base_dir
+
+        try:
+            # Lazy import to avoid requiring Playwright/Crawl4AI in local_jsonl mode.
+            from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig  # type: ignore
+            from crawl4ai.deep_crawling import BFSDeepCrawlStrategy, DomainFilter, FilterChain  # type: ignore
+        except Exception as e:
+            raise RuntimeError(
+                "Crawl4AI/Playwright is required for docs crawling but is not available. "
+                "Either install the missing dependencies (e.g., playwright) or set "
+                "docs.source=local_jsonl to bypass crawling."
+            ) from e
+
         print(f"[DeepCrawler] Starting deep crawl from {start_url} (max_depth={self.max_depth})")
         
         base_domain = self._extract_domain(start_url)
         markdown_results = []
         self.crawl_stats["start_time"] = time.time()
         
-        # 设置用户数据目录和数据库目录以避免权限问题
-        import tempfile
-        crawl_base_dir = tempfile.mkdtemp(prefix="crawl4ai_")
-        user_data_dir = tempfile.mkdtemp(prefix="crawl4ai_browser_")
-        
-        # 设置环境变量以使用临时目录
-        import os
-        os.environ["CRAWL4_AI_BASE_DIRECTORY"] = crawl_base_dir
+        # 临时目录已在 import 前配置
         
         browser_config = BrowserConfig(
             browser_type="chromium",
@@ -435,6 +449,112 @@ class DeepCrawler:
         
         return "\n".join(markdown_results), self.crawl_stats
 
+
+class LightweightOfficialDocsFetcher:
+    """
+    Lightweight fallback fetcher for official docs pages.
+
+    Used when deep crawling fails (e.g. timeout). It fetches a small number of
+    official URLs and builds the same docs_context schema expected downstream:
+    "Source/Title/Depth/Content".
+    """
+
+    def __init__(self, request_timeout: float = 15.0, max_pages: int = 8):
+        self.request_timeout = float(request_timeout)
+        self.max_pages = int(max_pages)
+
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        parts = urlsplit(url)
+        # Keep scheme/netloc/path only; strip query+fragment for dedupe stability.
+        return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+
+    @staticmethod
+    def _seed_urls(db_name: str, official_docs_url: str) -> List[str]:
+        db = (db_name or "").strip().lower()
+        seeds = [official_docs_url]
+        if db == "weaviate":
+            seeds.extend(
+                [
+                    "https://weaviate.io/developers/weaviate/introduction",
+                    "https://weaviate.io/developers/weaviate/manage-data",
+                    "https://weaviate.io/developers/weaviate/search",
+                    "https://weaviate.io/developers/weaviate/api",
+                ]
+            )
+        return seeds
+
+    def fetch(
+        self,
+        db_name: str,
+        official_docs_url: str,
+        *,
+        is_official_url_checker,
+    ) -> str:
+        """
+        Fetch a light subset of official docs pages and return formatted docs_context.
+        """
+        from bs4 import BeautifulSoup
+        import httpx
+        from src.parsers.html_cleaner import HTMLCleaner
+
+        queue = deque(self._seed_urls(db_name, official_docs_url))
+        queued = {self._normalize_url(u) for u in queue if u}
+        visited = set()
+        sections: List[str] = []
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (compatible; Agent0DocsFallback/1.0; "
+                "+https://weaviate.io/developers/weaviate)"
+            )
+        }
+        with httpx.Client(timeout=self.request_timeout, follow_redirects=True, headers=headers) as client:
+            while queue and len(sections) < self.max_pages:
+                raw_url = queue.popleft()
+                url = self._normalize_url(raw_url)
+                if not url or url in visited:
+                    continue
+                visited.add(url)
+
+                if not is_official_url_checker(url, db_name):
+                    continue
+
+                try:
+                    resp = client.get(url)
+                except Exception:
+                    continue
+                if not (200 <= resp.status_code < 300):
+                    continue
+
+                html = (resp.text or "").strip()
+                if not html:
+                    continue
+                clean_text = HTMLCleaner.clean_html(html).strip()
+                if len(clean_text) < 200:
+                    continue
+
+                title = HTMLCleaner.extract_title(html) or "No title"
+                sections.append(
+                    f"Source: {url}\nTitle: {title}\nDepth: 0\nContent:\n{clean_text}\n"
+                )
+
+                # Expand from official in-page links only.
+                try:
+                    soup = BeautifulSoup(html, "html.parser")
+                    for a in soup.find_all("a", href=True):
+                        candidate = self._normalize_url(urljoin(url, a["href"]))
+                        if not candidate or candidate in visited or candidate in queued:
+                            continue
+                        if is_official_url_checker(candidate, db_name):
+                            queue.append(candidate)
+                            queued.add(candidate)
+                except Exception:
+                    continue
+
+        return "\n".join(sections)
+
+
 class DBInfo(BaseModel):
     """Schema for extracting DB name and version."""
     db_name: str = Field(description="Name of the target vector database in lowercase (e.g., 'milvus', 'qdrant')")
@@ -461,40 +581,331 @@ class EnvReconAgent:
         self.runs_dir = os.path.join(os.getcwd(), ".trae", "runs")
         os.makedirs(self.runs_dir, exist_ok=True)
 
+        # Default Weaviate version used when user specifies "latest" (pin to a known-good image)
+        self._weaviate_fallback_version = "1.36.9"
+
+    def _resolve_docs_source(self) -> str:
+        return str(self.config.get("docs.source", default="auto") or "auto").strip().lower()
+
+    def _resolve_docs_jsonl_path(self, db_name: str) -> str:
+        """
+        Resolve docs JSONL path from .trae/config.yaml (docs.local_jsonl_path).
+
+        Supports template variable: {db_name}
+        """
+        template = self.config.get(
+            "docs.local_jsonl_path",
+            default=".trae/cache/{db_name}_io_docs_depth3.jsonl",
+        )
+        try:
+            template_str = str(template)
+            db_lower = (db_name or "").strip().lower() or "unknown"
+
+            # If template supports {db_name}, format it directly.
+            if "{db_name}" in template_str:
+                return template_str.format(db_name=db_lower)
+
+            # Backward-compat / safety: if user configured a fixed filename (e.g. milvus_*.jsonl),
+            # ensure we still generate a per-DB cache file to avoid cross-DB contamination.
+            #
+            # Example:
+            #   docs.local_jsonl_path: .trae/cache/milvus_io_docs_depth3.jsonl
+            # For qdrant, we rewrite to:
+            #   .trae/cache/milvus_io_docs_depth3_qdrant.jsonl
+            p = Path(template_str)
+            if p.suffix.lower() in (".jsonl", ".json"):
+                stem_lower = p.stem.lower()
+                if db_lower not in stem_lower:
+                    new_name = f"{p.stem}_{db_lower}{p.suffix}"
+                    return str(p.with_name(new_name))
+
+            # Otherwise, return template as-is.
+            return template_str
+        except Exception:
+            # If template formatting fails, fall back to a safe default.
+            return f".trae/cache/{db_name}_io_docs_depth3.jsonl"
+
+    def _resolve_docs_cache_ttl_days(self) -> int:
+        """
+        Resolve docs cache TTL from .trae/config.yaml.
+
+        Priority:
+        1) docs.cache_ttl_days
+        2) cache.ttl_days (backward-compatible)
+        3) 7
+        """
+        ttl = self.config.get_int("docs.cache_ttl_days", default=0)
+        if ttl and ttl > 0:
+            return ttl
+        ttl = self.config.get_int("cache.ttl_days", default=7)
+        return ttl if ttl > 0 else 7
+
+    def _basic_docs_validation(self, docs_context: str) -> dict:
+        """Lightweight validation used for local_jsonl mode (no preprocess)."""
+        total_docs = len(re.findall(r"^Source:", docs_context or "", re.MULTILINE))
+        total_chars = len(docs_context or "")
+        issues: List[str] = []
+        if total_docs <= 0 or total_chars <= 0:
+            issues.append("Local docs library produced empty context")
+        return {
+            "passed": len(issues) == 0,
+            "total_docs": total_docs,
+            "total_chars": total_chars,
+            "issues": issues,
+            "warnings": [],
+        }
+
+    def _normalize_version(self, db_name: str, version: Optional[str]) -> str:
+        """
+        Normalize version strings coming from LLM parsing.
+
+        Goals:
+        - Strip leading "v" for internal storage (e.g., "v1.36.9" -> "1.36.9")
+        - Keep "latest" as-is for most DBs
+        - Pin Weaviate "latest" to a stable fallback to avoid breaking changes
+        """
+        v = (version or "").strip()
+        if not v:
+            v = "latest"
+
+        v_lower = v.lower()
+        if v_lower == "latest":
+            if (db_name or "").lower() == "weaviate":
+                return self._weaviate_fallback_version
+            return "latest"
+
+        # Strip leading v/V only when it prefixes a numeric version
+        v = re.sub(r"^[vV](?=\d)", "", v)
+        return v
+
+    def _docker_tag_for(self, db_name: str, normalized_version: str) -> str:
+        """
+        Convert normalized version to the concrete Docker tag expected by each image registry.
+        """
+        db = (db_name or "").lower()
+        v = (normalized_version or "latest").strip()
+        if v.lower() == "latest":
+            return "latest"
+
+        # Milvus and Qdrant images commonly tag releases with a leading 'v'
+        if db in ("milvus", "qdrant"):
+            return v if v.startswith("v") else f"v{v}"
+
+        # Weaviate image tags are numeric (no leading 'v')
+        if db == "weaviate":
+            return re.sub(r"^[vV](?=\d)", "", v)
+
+        return v
+
+    @staticmethod
+    def _is_port_allocation_error(error_text: str) -> bool:
+        """
+        Detect common Docker port-allocation conflict messages.
+        """
+        text = (error_text or "").lower()
+        markers = (
+            "port is already allocated",
+            "address already in use",
+            "bind for 0.0.0.0:",
+            "bind: only one usage of each socket address",
+        )
+        return any(m in text for m in markers)
+
+    def _cleanup_containers_publishing_port(self, host_port: int) -> int:
+        """
+        Best-effort cleanup for "from_scratch" runs: stop/remove previous hot sandboxes that
+        are binding the target host port.
+        """
+        try:
+            # NOTE: Avoid docker SDK here. Some environments fail to initialize docker-py due to
+            # `http+docker://` transport issues. The Docker CLI is more robust/portable.
+            #
+            # `publish=<port>` filter returns containers that publish the given host port.
+            ps = subprocess.run(
+                ["docker", "ps", "-a", "--filter", f"publish={host_port}", "--format", "{{.ID}}\t{{.Names}}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError as e:
+            logger.warning(f"[Agent 0] from_scratch cleanup skipped (docker CLI unavailable): {e}")
+            return 0
+        except Exception as e:
+            logger.warning(f"[Agent 0] from_scratch cleanup skipped (docker invocation failed): {e}")
+            return 0
+
+        if ps.returncode != 0:
+            msg = (ps.stderr or ps.stdout or "").strip()
+            logger.warning(f"[Agent 0] from_scratch cleanup skipped (docker ps failed rc={ps.returncode}): {msg}")
+            return 0
+
+        # Lines look like: "<id>\t<name>"
+        to_remove: list[tuple[str, str]] = []
+        for raw in (ps.stdout or "").splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if "\t" in line:
+                cid, name = line.split("\t", 1)
+            else:
+                # Defensive parsing (shouldn't happen with the chosen format)
+                parts = line.split()
+                cid, name = (parts[0], parts[1] if len(parts) > 1 else "")
+
+            cid = cid.strip()
+            name = name.strip()
+            if not cid:
+                continue
+            to_remove.append((cid, name))
+
+        removed = 0
+        for cid, name in to_remove:
+            try:
+                rm = subprocess.run(
+                    ["docker", "rm", "-f", cid],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if rm.returncode != 0:
+                    msg = (rm.stderr or rm.stdout or "").strip()
+                    logger.warning(
+                        f"[Agent 0] from_scratch failed to remove container {name} ({cid}) rc={rm.returncode}: {msg}"
+                    )
+                    continue
+                removed += 1
+                logger.info(f"[Agent 0] from_scratch removed container: {name} ({cid}) (host_port={host_port})")
+            except Exception as e:
+                logger.warning(f"[Agent 0] from_scratch failed to remove container {name} ({cid}): {e}")
+
+        if removed:
+            # Re-check once to reduce flakiness where a container lingers briefly after rm -f.
+            try:
+                ps2 = subprocess.run(
+                    ["docker", "ps", "-a", "--filter", f"publish={host_port}", "--format", "{{.Names}}"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if ps2.returncode == 0:
+                    remaining = [n.strip() for n in (ps2.stdout or "").splitlines() if n.strip()]
+                    if remaining:
+                        logger.warning(
+                            f"[Agent 0] from_scratch cleanup incomplete: remaining={remaining} (host_port={host_port})"
+                        )
+            except Exception:
+                pass
+
+            logger.info(f"[Agent 0] from_scratch cleanup complete: removed={removed} (host_port={host_port})")
+        return removed
+
     def _is_official_docs_url(self, url: str, db_name: str) -> bool:
         """Filter URLs to official documentation domains only."""
-        official_patterns = [
-            f"{db_name}.io/docs",
-            f"{db_name}.org/docs",
-            f"docs.{db_name}.io",
-            f"github.com/{db_name}",
-            f"milvus.io/docs",  # Specific known domains
-            f"qdrant.tech/documentation",
-            f"weaviate.io/developers",
-            f"zilliz.com",
-            f"pinecone.io/docs",
-            f"mongodb.com/docs/atlas/vector-search",
-            f"redis.io/docs",
-            f"elastic.co/guide",
-            f"clickhouse.com/docs",
-            f"chromadb.com",
-            f"docs.trychroma.com",
-        ]
+        db = (db_name or "").strip().lower()
+        # IMPORTANT: patterns must be DB-specific; otherwise search fallback may
+        # accidentally select Milvus docs when targeting qdrant/weaviate.
+        per_db_patterns = {
+            "milvus": [
+                "milvus.io/docs",
+                "zilliz.com",  # Milvus ecosystem docs
+                "github.com/milvus-io",
+            ],
+            "qdrant": [
+                "qdrant.tech/documentation",
+                "github.com/qdrant",
+            ],
+            "weaviate": [
+                "weaviate.io/developers/weaviate",
+                "github.com/weaviate",
+            ],
+            "pinecone": ["docs.pinecone.io", "pinecone.io/docs", "github.com/pinecone-io"],
+            "chroma": ["docs.trychroma.com", "chromadb.com", "github.com/chroma-core"],
+            "elasticsearch": ["elastic.co/guide", "github.com/elastic"],
+            "redis": ["redis.io/docs", "github.com/redis"],
+            "mongodb": ["mongodb.com/docs/atlas/vector-search", "github.com/mongodb"],
+            "clickhouse": ["clickhouse.com/docs", "github.com/clickhouse"],
+        }
+        official_patterns = per_db_patterns.get(db, [])
+        # Generic fallbacks (still constrained to the DB name).
+        if not official_patterns and db:
+            official_patterns = [
+                f"{db}.io/docs",
+                f"{db}.org/docs",
+                f"docs.{db}.io",
+                f"github.com/{db}",
+            ]
         url_lower = url.lower()
         return any(pattern in url_lower for pattern in official_patterns)
+
+    def _cached_docs_has_official_domain(self, docs_context: str, db_name: str) -> bool:
+        """
+        Validate that a cached docs blob contains at least one Source: URL that
+        matches the target DB's official documentation domains/paths.
+
+        This is a safety guard against cross-DB contamination when reusing
+        previous runs' raw_docs.json snapshots.
+        """
+        if not (docs_context or "").strip():
+            return False
+
+        # Bound the scan to keep the check cheap.
+        urls = re.findall(r"^Source:\s*(https?://\S+)", docs_context, flags=re.MULTILINE)
+        for url in urls[:200]:
+            try:
+                if self._is_official_docs_url(url, db_name):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _fetch_official_docs_lightweight(
+        self,
+        db_name: str,
+        official_docs_url: Optional[str],
+        *,
+        min_docs: int = 1,
+        min_chars: int = 500,
+    ) -> str:
+        """
+        Fallback path when deep crawling fails: fetch a small set of official docs pages
+        and emit a compliant docs_context (Source/Title/Depth/Content).
+        """
+        if not (official_docs_url or "").strip():
+            return ""
+
+        _max_pages = 30 if (db_name or "").lower() == "weaviate" else 8
+        fetcher = LightweightOfficialDocsFetcher(request_timeout=30.0, max_pages=_max_pages)
+        docs_context = fetcher.fetch(
+            db_name,
+            official_docs_url,
+            is_official_url_checker=self._is_official_docs_url,
+        )
+
+        if not (docs_context or "").strip():
+            return ""
+
+        # Reuse hard-gate to ensure downstream contract remains non-empty.
+        self._ensure_docs_non_empty_or_abort(
+            docs_context,
+            db_name,
+            where="fetch.lightweight_fallback",
+            min_docs=min_docs,
+            min_chars=min_chars,
+        )
+        return docs_context
 
     def _fetch_documentation(self, db_info: DBInfo) -> str:
         """Fetch actual documentation using Local Library or Deep Crawl4AI."""
         print(f"[Agent 0] Fetching real documentation for {db_info.db_name} {db_info.version}...")
 
         # Check if local JSONL documentation library is requested
-        docs_source = self.config.get("docs.source", default="auto")
+        docs_source = self._resolve_docs_source()
         if docs_source == "local_jsonl":
-            local_path = self.config.get("docs.local_jsonl_path", default=".trae/cache/milvus_io_docs_depth3.jsonl")
+            local_path = self._resolve_docs_jsonl_path(db_info.db_name)
             print(f"[Agent 0] Using local documentation library: {local_path}")
-            print(f"[Agent 0] AUTO-CRAWL and DOCUMENT-CACHE DISABLED")
+            print("[Agent 0] docs.source=local_jsonl: skip crawl/cache/preprocess; load JSONL directly per DB")
             
-            library = LocalDocsLibrary(local_path)
+            library = LocalDocsLibrary(local_path, db_name=db_info.db_name)
             docs_context = library.load_docs_context()
             
             if not docs_context.strip():
@@ -502,28 +913,41 @@ class EnvReconAgent:
                 
             return docs_context
 
-        # Check for cached documentation from previous runs
+        # Check for cached documentation from previous runs.
+        # When docs.source='crawl', skip reuse: caller explicitly asked for a fresh crawl.
         import glob
-        cache_files = glob.glob(os.path.join(self.runs_dir, "*", "raw_docs.json"))
+        cache_files = []
+        if docs_source != "crawl":
+            cache_files = glob.glob(os.path.join(self.runs_dir, "*", "raw_docs.json"))
         
         for cache_file in cache_files:
             try:
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     cached_data = json.load(f)
                     if cached_data.get('db_name') == db_info.db_name and cached_data.get('version') == db_info.version:
+                        cached_docs = cached_data.get('full_docs', '') or ''
+                        if not self._cached_docs_has_official_domain(cached_docs, db_info.db_name):
+                            print(
+                                f"[Agent 0] Ignoring cached documentation from: {os.path.basename(os.path.dirname(cache_file))} "
+                                f"(no official {db_info.db_name} docs domain detected)"
+                            )
+                            continue
                         print(f"[Agent 0] Using cached documentation from: {os.path.basename(os.path.dirname(cache_file))}")
-                        return cached_data.get('full_docs', '')
+                        return cached_docs
             except Exception as e:
                 print(f"[Agent 0] Failed to read cache file {cache_file}: {e}")
                 continue
 
         docs_context = ""
+        official_docs_url = None
         try:
+            _max_pages = 200 if (db_info.db_name or "").lower() == "weaviate" else 100
+            _total_timeout = 1200 if (db_info.db_name or "").lower() == "weaviate" else 600
             deep_crawler = DeepCrawler(
                 max_depth=3,
                 page_timeout=30,
-                total_timeout=600,
-                max_pages=100
+                total_timeout=_total_timeout,
+                max_pages=_max_pages
             )
             
             official_docs_url = deep_crawler._get_official_docs_url(db_info.db_name)
@@ -574,32 +998,121 @@ class EnvReconAgent:
                 docs_context = "Failed to extract content from deep crawl."
 
         except Exception as e:
-            print(f"[Agent 0] Failed to fetch real documentation: {e}")
-            raise RuntimeError(f"Documentation fetching failed: {e}")
+            print(f"[Agent 0] Deep crawl failed for {db_info.db_name}: {e}")
+            try:
+                fallback_docs = self._fetch_official_docs_lightweight(
+                    db_info.db_name,
+                    official_docs_url,
+                    min_docs=1,
+                    min_chars=500 if db_info.db_name.lower() == "weaviate" else 200,
+                )
+                if fallback_docs.strip():
+                    print(
+                        f"[Agent 0] Lightweight official docs fallback succeeded "
+                        f"for {db_info.db_name} (chars={len(fallback_docs):,})"
+                    )
+                    docs_context = fallback_docs
+                else:
+                    raise RuntimeError("lightweight fallback returned empty docs")
+            except Exception as fallback_error:
+                print(f"[Agent 0] Failed to fetch real documentation: {e}; fallback failed: {fallback_error}")
+                raise RuntimeError(
+                    f"Documentation fetching failed: deep_crawl={e}; fallback={fallback_error}"
+                ) from fallback_error
 
         return docs_context
 
-    def _filter_docs(self, docs_content: str, config) -> tuple:
+    def _docs_preprocess_policy(self, db_name: str, docs_config) -> SimpleNamespace:
+        """
+        Build per-DB preprocessing/validation policy.
+
+        Why:
+        - Milvus docs live under /docs/ and are versioned (/docs/v2.6/...)
+        - Qdrant docs live under /documentation/ (not /docs/)
+        - Weaviate docs live under /developers/weaviate (not /docs/)
+
+        We keep this policy intentionally conservative to avoid accidentally filtering
+        out the whole corpus for non-Milvus DBs.
+        """
+        db = (db_name or "").strip().lower()
+
+        # Defaults from global DocsConfig (historically tuned for Milvus).
+        default_allowed_versions = list(getattr(docs_config, "allowed_versions", []) or [])
+        default_min_chars = int(getattr(docs_config, "min_chars", 500) or 500)
+        default_min_docs = int(getattr(docs_config, "min_docs", 50) or 50)
+        default_required_docs = list(getattr(docs_config, "required_docs", []) or [])
+
+        if db == "milvus":
+            return SimpleNamespace(
+                db_name=db,
+                url_path_allow_substrings=["/docs"],
+                allowed_versions=default_allowed_versions,
+                min_chars=default_min_chars,
+                min_docs=default_min_docs,
+                required_docs=default_required_docs,
+                # Hard minimums: used only to decide abort vs proceed.
+                hard_min_docs=1,
+                hard_min_chars=500,
+            )
+
+        if db == "qdrant":
+            # Qdrant docs are not consistently versioned in URL; do not apply version gating.
+            return SimpleNamespace(
+                db_name=db,
+                url_path_allow_substrings=["/documentation"],
+                allowed_versions=[],
+                min_chars=max(250, min(default_min_chars, 500)),
+                min_docs=max(10, min(default_min_docs, 30)),
+                required_docs=["collection", "point", "vector", "filter"],
+                hard_min_docs=1,
+                hard_min_chars=500,
+            )
+
+        if db == "weaviate":
+            return SimpleNamespace(
+                db_name=db,
+                url_path_allow_substrings=["/developers/weaviate", "/docs.weaviate.io/weaviate", "/docs.weaviate.io/deploy", "/docs.weaviate.io/concepts"],
+                allowed_versions=[],
+                min_chars=max(250, min(default_min_chars, 200)),
+                min_docs=3,
+                required_docs=["schema"],
+                hard_min_docs=1,
+                hard_min_chars=200,
+            )
+
+        # Fallback for other DBs: allow any path under the start domain; do not apply version gating.
+        return SimpleNamespace(
+            db_name=db or "unknown",
+            url_path_allow_substrings=[],
+            allowed_versions=[],
+            min_chars=max(200, min(default_min_chars, 500)),
+            min_docs=max(5, min(default_min_docs, 20)),
+            required_docs=[],
+            hard_min_docs=1,
+            hard_min_chars=500,
+        )
+
+    def _filter_docs(self, docs_content: str, policy: SimpleNamespace) -> tuple:
         """
         Filter crawled documents by version and quality.
 
         Args:
             docs_content: Raw markdown content from crawling
-            config: DocsConfig with filter settings
+            policy: per-DB preprocessing policy
 
         Returns:
             (filtered_content, stats_dict)
 
         Filter rules:
-        - Version match: Only keep URLs containing /docs/v{allowed_version}
+        - Path: Keep only allowed doc paths for this DB (e.g. /documentation for qdrant)
+        - Version match (Milvus only by default): Only keep URLs containing /docs/v{allowed_version}
         - Quality: Each document section should have at least min_chars characters
-        - Path: Only keep /docs or /docs/zh paths
         """
         logger.info("[Preprocess] Starting document filtering...")
 
-        # Extract filter settings from config
-        allowed_versions = getattr(config, 'allowed_versions', ['2.6'])
-        min_chars = getattr(config, 'min_chars', 500)
+        allowed_versions = list(getattr(policy, "allowed_versions", []) or [])
+        min_chars = int(getattr(policy, "min_chars", 500) or 500)
+        allow_paths = [p.lower() for p in (getattr(policy, "url_path_allow_substrings", []) or []) if isinstance(p, str) and p.strip()]
 
         # Split content into document sections (each starts with "Source:")
         sections = re.split(r'(?=^Source:)', docs_content, flags=re.MULTILINE)
@@ -626,31 +1139,33 @@ class EnvReconAgent:
 
             url = url_match.group(1)
 
-            # Rule 1: Path filter - only keep /docs or /docs/zh paths
+            # Rule 1: Path filter - keep only DB-specific doc paths (if configured).
             parsed_url = urlparse(url)
             path_lower = parsed_url.path.lower()
-            if '/docs/' not in path_lower and path_lower != '/docs':
-                stats["filtered_out_path"] += 1
-                logger.debug(f"[Preprocess] Filtered out (path): {url}")
-                continue
+            if allow_paths:
+                if not any(p in path_lower for p in allow_paths):
+                    stats["filtered_out_path"] += 1
+                    logger.debug(f"[Preprocess] Filtered out (path): {url}")
+                    continue
 
             # Rule 2: Version filter - check for allowed version patterns
-            version_match_found = False
-            for ver in allowed_versions:
-                # Match patterns like /docs/v2.6/ or /docs/v2.4.x/
-                pattern = f'/docs/v{re.escape(ver)}'
-                if pattern in path_lower:
-                    version_match_found = True
-                    break
-                # Also allow URLs that don't have an explicit version (e.g., /docs/ root)
-                if path_lower.rstrip('/') in ('/docs', '/docs/', '/docs/zh', '/docs/zh/'):
-                    version_match_found = True
-                    break
+            if allowed_versions:
+                version_match_found = False
+                for ver in allowed_versions:
+                    # Milvus-style versioning: /docs/v2.6/
+                    pattern = f'/docs/v{re.escape(ver)}'
+                    if pattern in path_lower:
+                        version_match_found = True
+                        break
+                    # Also allow URLs that don't have an explicit version (root landing pages).
+                    if path_lower.rstrip('/') in ('/docs', '/docs/', '/docs/zh', '/docs/zh/'):
+                        version_match_found = True
+                        break
 
-            if not version_match_found and allowed_versions:
-                stats["filtered_out_version"] += 1
-                logger.debug(f"[Preprocess] Filtered out (version): {url}")
-                continue
+                if not version_match_found:
+                    stats["filtered_out_version"] += 1
+                    logger.debug(f"[Preprocess] Filtered out (version): {url}")
+                    continue
 
             # Rule 3: Quality filter - minimum character count per section
             content_match = re.search(r'Content:\n?(.*)', section, re.DOTALL)
@@ -671,13 +1186,13 @@ class EnvReconAgent:
 
         return filtered_content, stats
 
-    def _validate_docs(self, filtered_content: str, config) -> dict:
+    def _validate_docs(self, filtered_content: str, policy: SimpleNamespace) -> dict:
         """
         Validate document library quality.
 
         Args:
             filtered_content: Filtered document content
-            config: DocsConfig with validation settings
+            policy: per-DB preprocessing policy
 
         Returns:
             {
@@ -690,14 +1205,14 @@ class EnvReconAgent:
 
         Validation checks:
         - Total document count >= min_docs
-        - Required keywords exist in content
+        - Required keywords exist in content (if configured)
         - Total chars > 1M (for meaningful corpus)
         """
         logger.info("[Preprocess] Starting document validation...")
 
-        # Extract validation settings from config
-        min_docs = getattr(config, 'min_docs', 50)
-        required_keywords = getattr(config, 'required_docs', ['index-explained', 'single-vector-search', 'multi-vector-search'])
+        min_docs = int(getattr(policy, "min_docs", 0) or 0)
+        required_keywords = list(getattr(policy, "required_docs", []) or [])
+        db_name = getattr(policy, "db_name", "unknown")
 
         issues = []
         warnings = []
@@ -707,25 +1222,27 @@ class EnvReconAgent:
         total_chars = len(filtered_content)
 
         # Check 1: Minimum document count
-        if doc_count < min_docs:
+        if min_docs and doc_count < min_docs:
             issues.append(
                 f"Document count ({doc_count}) below minimum threshold ({min_docs})"
             )
         else:
             logger.debug(f"[Preprocess] Doc count OK: {doc_count} >= {min_docs}")
 
-        # Check 2: Required keywords presence
-        missing_keywords = []
-        for keyword in required_keywords:
-            if keyword.lower() not in filtered_content.lower():
-                missing_keywords.append(keyword)
+        # Check 2: Required keywords presence (optional per DB)
+        if required_keywords:
+            missing_keywords = []
+            haystack = filtered_content.lower()
+            for keyword in required_keywords:
+                if keyword.lower() not in haystack:
+                    missing_keywords.append(keyword)
 
-        if missing_keywords:
-            issues.append(
-                f"Missing required keywords: {missing_keywords}"
-            )
-        else:
-            logger.debug(f"[Preprocess] Required keywords OK: all {len(required_keywords)} found")
+            if missing_keywords:
+                issues.append(
+                    f"Missing required keywords ({db_name}): {missing_keywords}"
+                )
+            else:
+                logger.debug(f"[Preprocess] Required keywords OK: all {len(required_keywords)} found")
 
         # Check 3: Total character count (1M threshold for meaningful corpus)
         min_corpus_size = 1_000_000
@@ -760,6 +1277,38 @@ class EnvReconAgent:
 
         return result
 
+    def _ensure_docs_non_empty_or_abort(
+        self,
+        docs_context: str,
+        db_name: str,
+        *,
+        where: str,
+        min_docs: int = 1,
+        min_chars: int = 200,
+    ) -> None:
+        """
+        Hard gate: if docs_context is empty (or effectively empty), abort early.
+
+        This prevents downstream agents from operating without evidence, and avoids writing/using empty caches.
+        """
+        text = (docs_context or "").strip()
+        doc_count = len(re.findall(r"^Source:", text, re.MULTILINE))
+        total_chars = len(text)
+
+        placeholder_markers = (
+            "could not find official documentation urls",
+            "failed to extract content from deep crawl",
+            "documentation fetching failed",
+        )
+        looks_like_placeholder = any(m in text.lower() for m in placeholder_markers)
+
+        # Minimal non-empty contract: at least `min_docs` Source sections and some content.
+        if (not text) or doc_count < int(min_docs) or total_chars < int(min_chars) or looks_like_placeholder:
+            raise RuntimeError(
+                f"Official docs context is empty/invalid for db={db_name} (where={where}, docs={doc_count}, chars={total_chars}). "
+                f"Abort to avoid running without documentation evidence."
+            )
+
     def _save_docs_cache(self, content: str, cache_path: str) -> None:
         """
         Save documents to JSONL cache file.
@@ -772,6 +1321,11 @@ class EnvReconAgent:
         If the raw content is not already structured as JSONL,
         wrap it in a single record format.
         """
+        # Avoid writing empty cache files: treat empty/whitespace content as a no-op.
+        if not (content or "").strip():
+            logger.info(f"[Preprocess] Skip saving docs cache: empty content (path={cache_path})")
+            return
+
         logger.info(f"[Preprocess] Saving docs cache to: {cache_path}")
 
         try:
@@ -782,31 +1336,41 @@ class EnvReconAgent:
             # If so, split into individual records; otherwise wrap as single record
             sections = re.split(r'(?=^Source:)', content, flags=re.MULTILINE)
 
-            with open(cache_file, 'w', encoding='utf-8') as f:
-                for i, section in enumerate(sections):
-                    if not section.strip():
-                        continue
+            records: List[dict] = []
+            for i, section in enumerate(sections):
+                if not section.strip():
+                    continue
 
-                    # Extract metadata from each section
-                    url_match = re.search(r'Source:\s*(https?://\S+)', section)
-                    title_match = re.search(r'Title:\s*(.+)', section)
-                    depth_match = re.search(r'Depth:\s*(\d+)', section)
-                    content_match = re.search(r'Content:\n?(.*)', section, re.DOTALL)
+                # Extract metadata from each section
+                url_match = re.search(r'Source:\s*(https?://\S+)', section)
+                title_match = re.search(r'Title:\s*(.+)', section)
+                depth_match = re.search(r'Depth:\s*(\d+)', section)
+                content_match = re.search(r'Content:\n?(.*)', section, re.DOTALL)
 
-                    record = {
-                        "url": url_match.group(1).strip() if url_match else f"section_{i}",
-                        "markdown": content_match.group(1).strip() if content_match else section.strip(),
-                        "metadata": {
-                            "title": title_match.group(1).strip() if title_match else "",
-                            "depth": int(depth_match.group(1)) if depth_match else 0,
-                            "cached_at": datetime.now().isoformat(),
-                        }
+                record = {
+                    "url": url_match.group(1).strip() if url_match else f"section_{i}",
+                    "markdown": content_match.group(1).strip() if content_match else section.strip(),
+                    "metadata": {
+                        "title": title_match.group(1).strip() if title_match else "",
+                        "depth": int(depth_match.group(1)) if depth_match else 0,
+                        "cached_at": datetime.now().isoformat(),
                     }
+                }
+                records.append(record)
 
+            if not records:
+                logger.info(f"[Preprocess] Skip saving docs cache: no non-empty records (path={cache_path})")
+                return
+
+            # Write to a temp file and atomically replace to avoid leaving a truncated cache on failure.
+            tmp_path = cache_file.with_suffix(cache_file.suffix + ".tmp")
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                for record in records:
                     f.write(json.dumps(record, ensure_ascii=False) + '\n')
+            os.replace(tmp_path, cache_file)
 
             cache_size_kb = cache_file.stat().st_size / 1024
-            logger.info(f"[Preprocess] Cache saved: {cache_path} ({cache_size_kb:.1f}KB, {len([s for s in sections if s.strip()])} records)")
+            logger.info(f"[Preprocess] Cache saved: {cache_path} ({cache_size_kb:.1f}KB, {len(records)} records)")
 
         except Exception as e:
             logger.error(f"[Preprocess] Failed to save docs cache: {e}")
@@ -835,6 +1399,15 @@ class EnvReconAgent:
         # Check 1: File existence
         if not cache_file.exists():
             logger.info(f"[Preprocess] Cache MISS: file does not exist: {cache_path}")
+            return None
+
+        # Treat empty JSONL cache files as a miss (common failure mode when previous runs wrote nothing).
+        try:
+            if cache_file.stat().st_size == 0:
+                logger.info(f"[Preprocess] Cache MISS: empty file: {cache_path}")
+                return None
+        except OSError as e:
+            logger.error(f"[Preprocess] Error checking cache file size: {e}")
             return None
 
         # Check 2: File age vs TTL
@@ -902,7 +1475,7 @@ class EnvReconAgent:
             logger.error(f"[Preprocess] Error loading docs cache: {e}")
             return None
 
-    def _preprocess_docs(self, raw_docs: str, state: WorkflowState) -> str:
+    def _preprocess_docs(self, raw_docs: str, state: WorkflowState, policy: SimpleNamespace, cache_path: str) -> str:
         """
         Main preprocessing pipeline: filter -> validate -> cache.
 
@@ -915,21 +1488,30 @@ class EnvReconAgent:
         """
         logger.info("[Preprocess] === Starting Document Preprocessing Pipeline ===")
 
-        # Load DocsConfig from AppConfig
-        from src.config import get_config
-        app_config = get_config()
-        docs_config = app_config.docs
-
         # Step 1: Filter documents
         logger.info("[Preprocess] [Step 1/3] Filtering documents...")
-        filtered_content, filter_stats = self._filter_docs(raw_docs, docs_config)
+        filtered_content, filter_stats = self._filter_docs(raw_docs, policy)
 
         # Step 2: Validate document library quality
         logger.info("[Preprocess] [Step 2/3] Validating document library...")
-        validation_result = self._validate_docs(filtered_content, docs_config)
+        validation_result = self._validate_docs(filtered_content, policy)
 
         # Store validation result on state for downstream consumers
         state.docs_validation = validation_result
+
+        # Hard abort if filtering produced empty content (critical failure mode).
+        # This is stricter than validation: we refuse to proceed without any official docs sections.
+        try:
+            self._ensure_docs_non_empty_or_abort(
+                filtered_content,
+                getattr(policy, "db_name", "unknown"),
+                where="preprocess.filtered",
+                min_docs=int(getattr(policy, "hard_min_docs", 1) or 1),
+                min_chars=int(getattr(policy, "hard_min_chars", 200) or 200),
+            )
+        except Exception as e:
+            logger.error(f"[Preprocess] Aborting due to empty/invalid filtered corpus: {e}")
+            raise
 
         # Log warning if validation did not pass but still proceed
         if not validation_result["passed"]:
@@ -940,7 +1522,6 @@ class EnvReconAgent:
 
         # Step 3: Save to cache
         logger.info("[Preprocess] [Step 3/3] Saving to JSONL cache...")
-        cache_path = docs_config.local_jsonl_path
         try:
             self._save_docs_cache(filtered_content, cache_path)
         except Exception as e:
@@ -982,6 +1563,9 @@ class EnvReconAgent:
         
         if db_info.db_name == "milvus":
             # Basic Milvus standalone template
+            milvus_tag = self._docker_tag_for(db_info.db_name, db_info.version)
+            minio_access_key = os.getenv("MILVUS_MINIO_ACCESS_KEY", f"ak_{secrets.token_hex(8)}")
+            minio_secret_key = os.getenv("MILVUS_MINIO_SECRET_KEY", secrets.token_urlsafe(24))
             compose_content = {
                 "version": "3.5",
                 "services": {
@@ -1000,8 +1584,8 @@ class EnvReconAgent:
                         "container_name": f"milvus-minio-{run_id}",
                         "image": "minio/minio:RELEASE.2023-03-20T20-16-18Z",
                         "environment": [
-                            "MINIO_ACCESS_KEY=minioadmin",
-                            "MINIO_SECRET_KEY=minioadmin"
+                            f"MINIO_ACCESS_KEY={minio_access_key}",
+                            f"MINIO_SECRET_KEY={minio_secret_key}"
                         ],
                         "command": "minio server /minio_data",
                         "healthcheck": {
@@ -1013,11 +1597,13 @@ class EnvReconAgent:
                     },
                     "standalone": {
                         "container_name": f"milvus-standalone-{run_id}",
-                        "image": f"milvusdb/milvus:{db_info.version}",
+                        "image": f"milvusdb/milvus:{milvus_tag}",
                         "command": ["milvus", "run", "standalone"],
                         "environment": [
                             "ETCD_ENDPOINTS=etcd:2379",
-                            "MINIO_ADDRESS=minio:9000"
+                            "MINIO_ADDRESS=minio:9000",
+                            f"MINIO_ACCESS_KEY={minio_access_key}",
+                            f"MINIO_SECRET_KEY={minio_secret_key}"
                         ],
                         "ports": ["19530:19530", "9091:9091"],
                         "depends_on": ["etcd", "minio"]
@@ -1025,23 +1611,51 @@ class EnvReconAgent:
                 }
             }
             endpoint = "localhost:19530"
-            credentials = {"user": "root", "password": ""}
+            credentials = {
+                "minio_access_key": minio_access_key,
+                "minio_secret_key": minio_secret_key,
+            }
             
         elif db_info.db_name == "qdrant":
             # Qdrant standalone template
+            qdrant_tag = self._docker_tag_for(db_info.db_name, db_info.version)
             compose_content = {
                 "version": "3",
                 "services": {
                     "qdrant": {
                         "container_name": f"qdrant-{run_id}",
-                        "image": f"qdrant/qdrant:{db_info.version}",
+                        "image": f"qdrant/qdrant:{qdrant_tag}",
                         "ports": ["6333:6333", "6334:6334"]
                     }
                 }
             }
             endpoint = "localhost:6333"
             credentials = {"api_key": ""}
-            
+
+        elif db_info.db_name == "weaviate":
+            # Weaviate template
+            weaviate_version = self._docker_tag_for(db_info.db_name, db_info.version) or self._weaviate_fallback_version
+            compose_content = {
+                "version": "3.8",
+                "services": {
+                    "weaviate": {
+                        "container_name": f"weaviate-{run_id}",
+                        "image": f"cr.weaviate.io/semitechnologies/weaviate:{weaviate_version}",
+                        "ports": ["8081:8080", "50051:50051"],
+                        "environment": [
+                            "QUERY_DEFAULTS_LIMIT=25",
+                            "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true",
+                            "PERSISTENCE_DATA_PATH=/var/lib/weaviate",
+                            "DEFAULT_VECTORIZER_MODULE=none"
+                        ],
+                        "volumes": [f"weaviate_data_{run_id}:/var/lib/weaviate"]
+                    }
+                },
+                "volumes": {f"weaviate_data_{run_id}": None}
+            }
+            endpoint = "localhost:8081"
+            credentials = {}
+
         else:
             raise ValueError(f"Unsupported database: {db_info.db_name}")
 
@@ -1051,7 +1665,7 @@ class EnvReconAgent:
             
         return compose_file_path, endpoint, credentials
 
-    def _spin_up_sandbox(self, db_info: DBInfo, compose_file: str, endpoint: str) -> bool:
+    def _spin_up_sandbox(self, db_info: DBInfo, compose_file: str, endpoint: str, from_scratch: bool = False) -> bool:
         """
         Check if a hot sandbox is already running to avoid cold start overhead.
         If not, spin up a new Docker environment.
@@ -1064,27 +1678,86 @@ class EnvReconAgent:
         # Simple port check to see if the sandbox is already "hot"
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             result = s.connect_ex((host, port))
-            if result == 0:
+            if result == 0 and not from_scratch:
                 print(f"[Agent 0] Hot sandbox detected on {endpoint}. Reusing environment.")
                 return True
+            if result == 0 and from_scratch:
+                print(f"[Agent 0] from_scratch=true, tearing down prior hot sandbox on {endpoint} (best-effort).")
+                self._cleanup_containers_publishing_port(port)
                 
         # If not hot, cold start
         run_dir = os.path.dirname(compose_file)
         print(f"[Agent 0] No hot sandbox found. Cold starting Docker environment in {run_dir}...")
         try:
+            # Use docker compose v2 (preferred) and disable ANSI to keep logs parseable in CI/sandboxes.
+            # Explicitly pass -f docker-compose.yml to avoid picking up other compose files accidentally.
             subprocess.run(
-                ["docker-compose", "up", "-d"],
+                ["docker", "compose", "--ansi", "never", "-f", "docker-compose.yml", "up", "-d"],
                 cwd=run_dir,
                 check=True,
-                capture_output=True
+                capture_output=True,
+                text=True,
             )
             # Add a small delay to let services initialize
             import time
             time.sleep(5)
             return True
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or "").strip()
+            stdout = (e.stdout or "").strip()
+            combined_output = "\n".join([p for p in (stderr, stdout) if p]).strip()
+
+            # from_scratch mode: if compose fails due to host-port conflict, auto-clean and retry once.
+            if from_scratch and self._is_port_allocation_error(combined_output):
+                print(
+                    f"[Agent 0] from_scratch detected port allocation conflict on {endpoint}. "
+                    f"Attempting auto-cleanup and one retry."
+                )
+                removed = self._cleanup_containers_publishing_port(port)
+                if removed > 0:
+                    try:
+                        subprocess.run(
+                            ["docker", "compose", "--ansi", "never", "-f", "docker-compose.yml", "up", "-d"],
+                            cwd=run_dir,
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        )
+                        import time
+                        time.sleep(5)
+                        return True
+                    except subprocess.CalledProcessError as retry_e:
+                        retry_stderr = (retry_e.stderr or "").strip()
+                        retry_stdout = (retry_e.stdout or "").strip()
+                        detail = " | ".join(
+                            [
+                                f"cmd={getattr(retry_e, 'cmd', None)}",
+                                f"returncode={getattr(retry_e, 'returncode', None)}",
+                                f"stderr={retry_stderr}" if retry_stderr else "",
+                                f"stdout={retry_stdout}" if retry_stdout else "",
+                            ]
+                        ).strip(" |")
+                        raise RuntimeError(
+                            f"Failed to spin up Docker environment after port-conflict cleanup: {detail}"
+                        ) from retry_e
+
+            detail_parts = [
+                f"cmd={getattr(e, 'cmd', None)}",
+                f"returncode={getattr(e, 'returncode', None)}",
+            ]
+            if stderr:
+                detail_parts.append(f"stderr={stderr}")
+            if stdout:
+                detail_parts.append(f"stdout={stdout}")
+            detail = " | ".join(detail_parts)
+            print(f"[Agent 0] Error: docker compose failed: {detail}")
+            raise RuntimeError(f"Failed to spin up Docker environment: {detail}") from e
+        except FileNotFoundError as e:
+            print(f"[Agent 0] Error: docker CLI not found: {e}")
+            raise RuntimeError(f"Failed to spin up Docker environment: docker CLI not found ({e})") from e
         except Exception as e:
             print(f"[Agent 0] Error: Docker compose failed or docker not running: {e}.")
-            raise RuntimeError(f"Failed to spin up Docker environment: {e}")
+            raise RuntimeError(f"Failed to spin up Docker environment: {e}") from e
 
     def execute(self, state: WorkflowState) -> WorkflowState:
         """Main execution flow for Agent 0."""
@@ -1105,42 +1778,66 @@ class EnvReconAgent:
 
         db_info, tokens_used = _invoke_with_retry()
         state.total_tokens_used += tokens_used
+        db_info.version = self._normalize_version(db_info.db_name, db_info.version)
         print(f"[Agent 0] Parsed target DB: {db_info.db_name}, Version: {db_info.version} (Tokens: {tokens_used})")
         
-        # Step 2: Fetch Real Documentation (with cache-first strategy + preprocessing pipeline)
+        # Step 2: Fetch Real Documentation
         docs_context = ""
         cache_hit = False
 
-        # 2a: Try loading from JSONL cache first
-        from src.config import get_config as _get_app_config
-        app_config = _get_app_config()
-        docs_config = app_config.docs
-        cache_path = docs_config.local_jsonl_path
-        ttl_days = getattr(docs_config, 'cache_ttl_days', 7)
-
-        cached_content = self._load_docs_cache(cache_path, ttl_days=ttl_days)
-        if cached_content is not None:
-            logger.info("[Agent 0] Cache HIT - using cached documents, skipping crawl")
-            docs_context = cached_content
-            cache_hit = True
-
-            # Run validation on cached content to populate docs_validation on state
-            validation_result = self._validate_docs(docs_context, docs_config)
-            state.docs_validation = validation_result
-            logger.info(
-                f"[Agent 0] Cached docs validation: "
-                f"{'PASS' if validation_result['passed'] else 'FAIL'} "
-                f"(docs={validation_result['total_docs']}, chars={validation_result['total_chars']:,})"
-            )
+        docs_source = self._resolve_docs_source()
+        if docs_source == "local_jsonl":
+            # Local JSONL mode: treat the JSONL as the source of truth; do not apply cache TTL or preprocess.
+            local_path = self._resolve_docs_jsonl_path(db_info.db_name)
+            logger.info(f"[Agent 0] docs.source=local_jsonl, loading per-db JSONL: {local_path}")
+            library = LocalDocsLibrary(local_path, db_name=db_info.db_name)
+            docs_context = library.load_docs_context()
+            state.docs_validation = self._basic_docs_validation(docs_context)
         else:
-            # 2b: Cache miss - perform full fetch then preprocess
-            logger.info("[Agent 0] Cache MISS - performing full documentation fetch")
-            raw_docs = self._fetch_documentation(db_info)
-            
-            # Run preprocessing pipeline: filter -> validate -> cache
-            docs_context = self._preprocess_docs(raw_docs, state)
-        
-        print(f"[Agent 0] Fetched real documentation for {db_info.db_name} (cache={'HIT' if cache_hit else 'MISS'})")
+            # Cache-first strategy (JSONL cache) + preprocess on miss
+            cache_path = self._resolve_docs_jsonl_path(db_info.db_name)
+            ttl_days = self._resolve_docs_cache_ttl_days()
+
+            # Use AppConfig docs settings only for filtering/validation knobs (NOT for cache path/TTL).
+            from src.config import get_config as _get_app_config
+            docs_config = _get_app_config().docs
+            policy = self._docs_preprocess_policy(db_info.db_name, docs_config)
+
+            cached_content = self._load_docs_cache(cache_path, ttl_days=ttl_days)
+            if cached_content is not None:
+                logger.info("[Agent 0] Cache HIT - using cached documents, skipping crawl")
+                docs_context = cached_content
+                cache_hit = True
+
+                # Run validation on cached content to populate docs_validation on state
+                validation_result = self._validate_docs(docs_context, policy)
+                state.docs_validation = validation_result
+                logger.info(
+                    f"[Agent 0] Cached docs validation: "
+                    f"{'PASS' if validation_result['passed'] else 'FAIL'} "
+                    f"(docs={validation_result['total_docs']}, chars={validation_result['total_chars']:,})"
+                )
+            else:
+                logger.info("[Agent 0] Cache MISS - performing full documentation fetch")
+                raw_docs = self._fetch_documentation(db_info)
+                docs_context = self._preprocess_docs(raw_docs, state, policy, cache_path=cache_path)
+
+        mode_label = "local_jsonl" if docs_source == "local_jsonl" else ("cache=HIT" if cache_hit else "cache=MISS")
+        print(f"[Agent 0] Fetched real documentation for {db_info.db_name} ({mode_label})")
+
+        # Hard gate: docs_context must be non-empty/valid regardless of source (local_jsonl/cache/crawl).
+        hard_min_docs = 1
+        hard_min_chars = 200
+        if docs_source != "local_jsonl":
+            hard_min_docs = int(getattr(policy, "hard_min_docs", 1) or 1)
+            hard_min_chars = int(getattr(policy, "hard_min_chars", 200) or 200)
+        self._ensure_docs_non_empty_or_abort(
+            docs_context,
+            db_info.db_name,
+            where=f"execute.{mode_label}",
+            min_docs=hard_min_docs,
+            min_chars=hard_min_chars,
+        )
         
         # Step 3: Spin up Environment
         try:
@@ -1148,7 +1845,7 @@ class EnvReconAgent:
             print(f"[Agent 0] Generated compose file at: {compose_file}")
             
             # Use the new sandbox pool method
-            success = self._spin_up_sandbox(db_info, compose_file, endpoint)
+            success = self._spin_up_sandbox(db_info, compose_file, endpoint, from_scratch=bool(getattr(state, "from_scratch", False)))
             if success:
                 print(f"[Agent 0] Successfully prepared {db_info.db_name} container on {endpoint}")
             

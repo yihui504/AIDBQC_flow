@@ -18,32 +18,30 @@ class RateLimiter:
     def acquire(self, wait: bool = True) -> bool:
         if not self.enabled:
             return True
-        with self.lock:
-            now = time.time()
-            
-            # Remove requests older than 1 minute
-            cutoff = now - 60
-            while self.requests and self.requests[0] < cutoff:
-                self.requests.popleft()
-            
-            if len(self.requests) < self.max_requests_per_minute:
-                self.requests.append(now)
-                return True
-            else:
+        while True:
+            wait_time = 0.0
+            with self.lock:
+                now = time.time()
+
+                # Remove requests older than 1 minute
+                cutoff = now - 60
+                while self.requests and self.requests[0] < cutoff:
+                    self.requests.popleft()
+
+                if len(self.requests) < self.max_requests_per_minute:
+                    self.requests.append(now)
+                    return True
+
                 if not wait or not self.wait_on_limit:
                     return False
-                
-                # Calculate wait time
+
+                # Calculate wait time and retry in loop
                 oldest_request = self.requests[0]
-                wait_time = oldest_request + 60 - now
-                
+                wait_time = max(0.0, oldest_request + 60 - now)
                 print(f"[RateLimiter] Rate limit reached. Waiting {wait_time:.2f}s before next request...")
-                
-        # Release lock before sleeping to avoid deadlock
-        if wait_time > 0:
-            time.sleep(wait_time)
-            
-        # Retry after waiting
-        return self.acquire(wait=True)
+
+            # Release lock before sleeping to avoid deadlock
+            if wait_time > 0:
+                time.sleep(wait_time)
 
 global_llm_rate_limiter = RateLimiter()

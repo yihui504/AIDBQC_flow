@@ -1,6 +1,8 @@
 import os
 import time
+import logging
 from typing import Dict, Any, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from src.agents.agent_factory import get_llm
 from langchain_core.prompts import ChatPromptTemplate
@@ -11,7 +13,10 @@ from src.state import WorkflowState, DefectReport
 from src.validators.reference_validator import ReferenceValidator
 from src.defects.enhanced_deduplicator import EnhancedDefectDeduplicator, InternalDefectReport
 from src.rate_limiter import global_llm_rate_limiter
+from src.config import ConfigLoader
 from langchain_community.callbacks.manager import get_openai_callback
+
+logger = logging.getLogger(__name__)
 
 class EmbeddingGenerator:
     """生成真实的语义嵌入向量用于 MRE 代码"""
@@ -100,10 +105,17 @@ class IsolatedCodeRunner:
                 "error": str | None
             }
         """
-        if not self.enabled or not self.docker_client:
-            return self._execute_fallback(code)
+        if not self.enabled:
+            return self._fail_closed_result(
+                "Isolated execution is disabled; host fallback is forbidden (fail-closed)."
+            )
+        if not self.docker_client:
+            return self._fail_closed_result(
+                "Docker client unavailable; host fallback is forbidden (fail-closed)."
+            )
         
         container = None
+        tmp_path = None
         try:
             import tempfile
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as tmp:
@@ -152,8 +164,8 @@ class IsolatedCodeRunner:
             try:
                 logs_bytes = container.logs(stdout=True, stderr=True).decode('utf-8')
                 stdout, stderr = self._parse_container_logs(logs_bytes)
-            except:
-                pass
+            except Exception as e:
+                logger.warning("[IsolatedCodeRunner] Failed to parse container logs: %s", e)
             
             exit_code = exit_status["StatusCode"]
             
@@ -171,8 +183,8 @@ class IsolatedCodeRunner:
                 try:
                     container.stop(timeout=5)
                     container.remove()
-                except:
-                    pass
+                except Exception as cleanup_exc:
+                    logger.warning("[IsolatedCodeRunner] Failed to cleanup container: %s", cleanup_exc)
             print(f"[IsolatedCodeRunner] Error executing code: {e}")
             return {
                 "success": False,
@@ -183,11 +195,11 @@ class IsolatedCodeRunner:
                 "error": str(e)
             }
         finally:
-            if os.path.exists(tmp_path):
+            if tmp_path and os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
-                except:
-                    pass
+                except Exception as cleanup_exc:
+                    logger.warning("[IsolatedCodeRunner] Failed to delete temp file '%s': %s", tmp_path, cleanup_exc)
     
     def _parse_container_logs(self, logs: str) -> Tuple[str, str]:
         """Parse container logs into stdout and stderr."""
@@ -206,62 +218,24 @@ class IsolatedCodeRunner:
         return '\n'.join(stdout_lines), '\n'.join(stderr_lines)
     
     def _execute_fallback(self, code: str) -> Dict[str, Any]:
-        """Fallback to subprocess execution when Docker is not available."""
-        import subprocess
-        import sys
-        import tempfile
-        import textwrap
-        
-        print(f"[IsolatedCodeRunner] Using subprocess fallback (Docker not available)")
-        
-        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", encoding="utf-8", delete=False) as tmp:
-            tmp.write(code)
-            tmp_path = tmp.name
-        
-        try:
-            result = subprocess.run(
-                [sys.executable, tmp_path],
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds
-            )
-            
-            return {
-                "success": result.returncode == 0,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "exit_code": result.returncode,
-                "timeout": False,
-                "error": None if result.returncode == 0 else f"Exit code: {result.returncode}"
-            }
-        except subprocess.TimeoutExpired:
-            return {
-                "success": False,
-                "stdout": "",
-                "stderr": "",
-                "exit_code": -1,
-                "timeout": True,
-                "error": f"Execution timed out after {self.timeout_seconds}s"
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "stdout": "",
-                "stderr": str(e),
-                "exit_code": -1,
-                "timeout": False,
-                "error": str(e)
-            }
-        finally:
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except:
-                    pass
+        """Deprecated: host fallback is explicitly forbidden (fail-closed)."""
+        return self._fail_closed_result(
+            "Host subprocess fallback is disabled for security (fail-closed)."
+        )
+
+    def _fail_closed_result(self, reason: str) -> Dict[str, Any]:
+        return {
+            "success": False,
+            "stdout": "",
+            "stderr": reason,
+            "exit_code": -1,
+            "timeout": False,
+            "error": reason,
+        }
 
 class GitHubIssue(BaseModel):
     title: str = Field(description="Issue title (e.g. '[Bug]: <Brief Description>')")
-    body_markdown: str = Field(description="Full markdown body of the issue, strictly following the official Milvus bug report template.")
+    body_markdown: str = Field(description="Full markdown body of the issue, strictly following the official vector database bug report template.")
 
 class DefectVerifierAgent:
     """
@@ -284,11 +258,24 @@ class DefectVerifierAgent:
         
         # NEW: Initialize embedding generator for real semantic vectors
         self.embedding_generator = EmbeddingGenerator()
+        self.config_loader = ConfigLoader()
+        self.config_loader.load()
+        mre_timeout = self.config_loader.get_int("isolated_mre.timeout_seconds", 30)
+        mre_image = self.config_loader.get("isolated_mre.image", "python:3.11-slim")
+        self.isolated_runner = IsolatedCodeRunner(
+            image=mre_image,
+            timeout_seconds=mre_timeout,
+        )
+        self.isolated_runner.set_config(self.config_loader)
         self.runs_root = os.path.join(".trae", "runs")
-        
+        self._current_db_fragments = None
+        # Used to pass per-defect target_doc into _generate_issue_for_defect without requiring
+        # a 3rd positional argument (unit tests monkeypatch _generate_issue_for_defect(defect, env_context)).
+        self._target_doc_by_case: Dict[str, Optional[str]] = {}
+
         # Following standard GitHub Bug Report Templates for databases
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a Senior QA Engineer responsible for converting internal defect reports into professional, community-ready GitHub Issues for the Milvus vector database.
+        ("system", """You are a Senior QA Engineer responsible for converting internal defect reports into professional, community-ready GitHub Issues for the {db_label} vector database.
 
 ### Format Instructions
 {format_instructions}
@@ -307,20 +294,18 @@ Your output MUST strictly follow this official-style GitHub Issue Markdown templ
 - [x] I have searched the existing issues
 
 ### Environment
-- **Milvus version**: {{db_version}}
+{db_env}
 - **Deployment mode**: Docker Standalone
 - **OS**: Windows / Linux
-- **SDK/Client**: pymilvus
 - **Vector config**: {{vector_config}}
 
 ### Describe the bug
 [A clear and concise description of what the bug is.]
 
 ### Steps To Reproduce
-[A clear, standalone, and concise Minimal Reproducible Example (MRE) in Python using the pymilvus SDK.
+[A clear, standalone, and concise Minimal Reproducible Example (MRE) in Python {mre_sdk_note}.
 The code MUST include:
-1. Connection logic (connections.connect)
-2. Collection creation with specific parameters.
+{mre_steps_hint}
 3. The exact operation that triggered the failure.
 4. **CRITICAL**: For semantic search bugs, use REAL semantic vectors (not random vectors).
 ]
@@ -345,8 +330,41 @@ Use the provided defect report, environment context, target document, and PRE-VA
 You MUST generate real Python code for the MRE based on the case_id and parameters. 
 CRITICAL: ONLY use the provided documentation context for the Evidence section. If no references are provided and no target document is available, state "No direct documentation reference found".
 """),
-            ("human", "Defect Report:\n{report}\n\nTarget Document (from source_url):\n{target_doc}\n\nEnvironment Context:\n{env_context}\n\nValidated References (Source of Truth):\n{validated_refs}")
+        ("human", "Defect Report:\n{report}\n\nTarget Document (from source_url):\n{target_doc}\n\nEnvironment Context:\n{env_context}\n\nValidated References (Source of Truth):\n{validated_refs}")
         ])
+
+    def _get_db_template_fragments(self, db_name: str) -> dict:
+        name = (db_name or "").lower().strip()
+        if name == "qdrant":
+            env_lines = "- **Qdrant version**: {{db_version}}\n- **SDK/Client**: qdrant-client"
+            return {
+                "db_label": "Qdrant",
+                "db_env": env_lines,
+                "env_lines": env_lines,
+                "mre_sdk_note": "using the qdrant-client SDK (QdrantClient)",
+                "mre_steps_hint": "1. Connection logic (QdrantClient)\n2. Collection creation with specific parameters.",
+                "db_exception_names": ["UnexpectedResponse", "ResponseException"],
+            }
+        elif name == "weaviate":
+            env_lines = "- **Weaviate version**: {{db_version}}\n- **SDK/Client**: weaviate-client"
+            return {
+                "db_label": "Weaviate",
+                "db_env": env_lines,
+                "env_lines": env_lines,
+                "mre_sdk_note": "using the weaviate-client SDK (WeaviateClient)",
+                "mre_steps_hint": "1. Connection logic (WeaviateClient)\n2. Collection creation with specific parameters.",
+                "db_exception_names": ["WeaviateQueryError", "WeaviateBaseError"],
+            }
+        else:
+            env_lines = "- **Milvus version**: {{db_version}}\n- **SDK/Client**: pymilvus"
+            return {
+                "db_label": "Milvus",
+                "db_env": env_lines,
+                "env_lines": env_lines,
+                "mre_sdk_note": "using the pymilvus SDK",
+                "mre_steps_hint": "1. Connection logic (connections.connect)\n2. Collection creation with specific parameters.",
+                "db_exception_names": ["MilvusException"],
+            }
 
     def _parse_docs_context(self, docs_context: str) -> Dict[str, str]:
         """Parse docs context into URL -> content mapping."""
@@ -961,20 +979,13 @@ CRITICAL: ONLY use the provided documentation context for the Evidence section. 
         Run MRE code in a subprocess and return (status, log).
         Statuses: SUCCESS, EXPECTED_REJECTION, INVALID_CODE, FAILED
         """
-        import subprocess
-        import sys
-        import tempfile
         import textwrap
         
         print(f"[Agent 6] Verifying MRE for {case_id}...")
         
-        # Indent the code to fit into the try-except block
+        # Indent the code to fit into the try-except block and run only in isolated runner.
         indented_code = textwrap.indent(code, "    ")
-        
-        # Create a temporary file for the MRE
-        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", encoding="utf-8", delete=False) as tmp:
-            # Inject small wrapper to catch and print specific errors
-            wrapped_code = f"""
+        wrapped_code = f"""
 import sys
 try:
 {indented_code}
@@ -986,28 +997,24 @@ except Exception as e:
     traceback.print_exc(file=sys.stderr)
     sys.exit(1)
 """
-            tmp.write(wrapped_code)
-            tmp_path = tmp.name
-
         try:
-            # Run the MRE using the same python interpreter
-            result = subprocess.run(
-                [sys.executable, tmp_path],
-                capture_output=True,
-                text=True,
-                timeout=30 # 30s timeout
-            )
-            
-            output = result.stdout + "\n" + result.stderr
+            result = self.isolated_runner.execute_code(wrapped_code)
+            output = (result.get("stdout", "") or "") + "\n" + (result.get("stderr", "") or "")
             expects_exit_zero_success = self._is_illegal_success_bug_type(bug_type)
+            exit_code = int(result.get("exit_code", -1))
+            if exit_code == -1 and result.get("error"):
+                return "FAILED", f"Reproduction Failed: {result.get('error')}"
             
             # 1. Check for Syntax or Indentation errors (these happen before execution)
             # Subprocess might fail to even start or fail during parsing
             if "IndentationError" in output or "SyntaxError" in output or "NameError" in output:
                 return "INVALID_CODE", f"MRE contains code quality errors:\n{output}"
 
-            if result.returncode != 0:
-                if "MilvusException" in output or "AssertionError" in output or "MRE_EXECUTION_FAILED" in output:
+            if exit_code != 0:
+                current_fragments = getattr(self, "_current_db_fragments", None) or {}
+                db_exceptions = current_fragments.get("db_exception_names", ["Exception"])
+                db_exc_match = any(exc in output for exc in db_exceptions)
+                if db_exc_match or "AssertionError" in output or "MRE_EXECUTION_FAILED" in output:
                     if any(err in output for err in ["AttributeError", "TypeError", "ImportError"]):
                          return "INVALID_CODE", f"MRE failed due to implementation error (not a bug):\n{output}"
                     if expects_exit_zero_success:
@@ -1022,13 +1029,8 @@ except Exception as e:
                     return "SUCCESS", f"Reproduction Successful: Illegal Success reproduced (exit 0).\nOutput:\n{output}"
                 return "FAILED", f"Reproduction Failed: Code executed without error (did not reproduce the bug).\nOutput:\n{output}"
                 
-        except subprocess.TimeoutExpired:
-            return "FAILED", "Reproduction Failed: MRE timed out."
         except Exception as e:
             return "FAILED", f"Verification system error: {e}"
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
 
     def _generate_issue_for_defect(
         self,
@@ -1042,7 +1044,10 @@ except Exception as e:
 
         # We use raw output and manual parsing for maximum robustness with GLM models
         # instead of relying solely on JsonOutputParser which is brittle with markdown-heavy prompts
-        chain = self.prompt.partial(format_instructions=self.parser.get_format_instructions()) | self.llm
+        chain = self.prompt.partial(
+            format_instructions=self.parser.get_format_instructions(),
+            **self._current_db_fragments,
+        ) | self.llm
 
         @tenacity.retry(
             stop=tenacity.stop_after_attempt(3),
@@ -1058,7 +1063,13 @@ except Exception as e:
                 relevant_docs = self._get_relevant_docs_for_defect(defect, docs_map_for_defect, max_chars=8000)
                 
                 # Truncate target_doc to safe size (max 3000 chars)
-                target_doc_truncated = target_doc or "Not provided (source_url missing)"
+                # NOTE: do not assign to `target_doc` here; assigning inside this closure would
+                # make it a local variable and can raise UnboundLocalError when referenced.
+                target_doc_value = target_doc
+                if target_doc_value is None:
+                    target_doc_value = getattr(self, "_target_doc_by_case", {}).get(getattr(defect, "case_id", ""), None)
+
+                target_doc_truncated = target_doc_value or "Not provided (source_url missing)"
                 if len(target_doc_truncated) > 3000:
                     target_doc_truncated = target_doc_truncated[:3000] + "\n... [truncated for API limit]"
                 
@@ -1085,21 +1096,41 @@ except Exception as e:
                     if json_match:
                         try:
                             res_dict = json.loads(json_match.group(1).strip())
-                        except:
-                            raise ValueError(f"Found JSON block but failed to parse: {content[:200]}...")
+                        except json.JSONDecodeError as e:
+                            raise ValueError(f"Found JSON block but failed to parse: {content[:200]}... | parser_error={e}") from e
                     else:
                         # Last resort: look for anything that looks like a JSON object
                         json_match = re.search(r"(\{.*\})", content, re.DOTALL)
                         if json_match:
                             try:
                                 res_dict = json.loads(json_match.group(1).strip())
-                            except:
-                                raise ValueError(f"Found something like JSON but failed to parse: {content[:200]}...")
+                            except json.JSONDecodeError as e:
+                                raise ValueError(f"Found something like JSON but failed to parse: {content[:200]}... | parser_error={e}") from e
                         else:
                             raise ValueError(f"No valid JSON found in response: {content[:200]}...")
                 
                 # Ensure result is a GitHubIssue object
                 res = GitHubIssue(**res_dict)
+                
+                # Post-process: ensure issue meets minimum quality standards
+                if res.body_markdown:
+                    # Check for minimum content requirements
+                    has_steps = 'Steps To Reproduce' in res.body_markdown or 'steps' in res.body_markdown.lower()
+                    has_code = '```python' in res.body_markdown or '```' in res.body_markdown
+                    
+                    if not has_steps or not has_code or len(res.body_markdown) < 200:
+                        # Issue is too short — try to enrich it or at least log warning
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.warning(f"[Agent 6] Issue for {defect.case_id if hasattr(defect, 'case_id') else '?'} appears incomplete ({len(res.body_markdown)} chars, steps={has_steps}, code={has_code})")
+                        
+                        # Attempt enrichment: if we have MRE from execution, append it
+                        mre_code = getattr(defect, 'mre_code', None) or getattr(self, '_last_mre_code', None)
+                        if mre_code and '```python' not in (res.body_markdown or ''):
+                            # Append MRE code section
+                            mre_section = f"\n\n### Steps To Reproduce\n\n```python\n{mre_code}\n```\n"
+                            res.body_markdown = (res.body_markdown or "") + mre_section
+                
                 return res, cb.total_tokens
 
         return _invoke_with_retry()
@@ -1145,6 +1176,10 @@ except Exception as e:
 
     def execute(self, state: WorkflowState) -> WorkflowState:
         print(f"[Agent 6] Verifying and deduplicating {len(state.defect_reports)} defects...")
+        
+        db_name = state.db_config.db_name if state.db_config else ""
+        self._current_db_fragments = self._get_db_template_fragments(db_name)
+        print(f"[Agent 6] DB template: db_label={self._current_db_fragments['db_label']}")
         
         # Deduplicate
         unique_defects = self._deduplicate(state.defect_reports)
@@ -1211,48 +1246,138 @@ except Exception as e:
 
         print(f"[Agent 6] Validated references for {validated_references_count} defects")
 
+        _DEFECT_TIMEOUT = 120
+
+        def _process_single_defect(defect):
+            target_doc = docs_map.get(defect.source_url) if defect.source_url else None
+            if target_doc:
+                print(f"[Agent 6] Case {defect.case_id}: Providing target document from {defect.source_url}")
+
+            # Store target_doc for optional use by _generate_issue_for_defect without changing its call signature.
+            # This also keeps unit tests (which monkeypatch _generate_issue_for_defect(defect, env_context)) working.
+            try:
+                self._target_doc_by_case[getattr(defect, "case_id", "")] = target_doc
+            except Exception:
+                pass
+
+            issue, tokens_used = self._generate_issue_for_defect(defect, env_context)
+
+            if issue is None:
+                print(f"[Agent 6] Warning: LLM returned None for Case {defect.case_id}. Skipping Issue generation.")
+                self._apply_verifier_outcome(defect, "failed", "Issue generation returned None; cannot verify MRE.")
+                return defect, 0
+
+            mre_code = self._extract_mre_code(issue.body_markdown)
+            if mre_code:
+                mre_code = self._inject_real_vectors(mre_code, defect)
+                defect.mre_code = mre_code
+                status, v_log = self._verify_mre(mre_code, defect.case_id, defect.bug_type)
+                self._apply_verifier_outcome(defect, status, v_log)
+            else:
+                self._apply_verifier_outcome(defect, "failed", "No MRE code block found in generated issue.")
+
+            verdict = getattr(defect, 'verifier_verdict', '') or ""
+            verified = defect.reproduced_bug if hasattr(defect, 'reproduced_bug') else False
+            
+            filename = os.path.join(run_dir, f"GitHub_Issue_{defect.case_id}.md")
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(f"# {issue.title}\n\n")
+                f.write(f"<!-- Verification Status: {verdict or 'unverified'} | Reproduced: {verified} -->\n\n")
+                f.write(issue.body_markdown)
+            defect.issue_url = filename
+            print(f"[Agent 6] Issue written for Case {defect.case_id} (verdict={verdict}, reproduced={verified}) -> {filename}")
+
+            return defect, tokens_used
+
         for defect in unique_defects:
             print(f"[Agent 6] Generating GitHub Issue for Case {defect.case_id}...")
             try:
-                # Load target document if available
-                target_doc = docs_map.get(defect.source_url) if defect.source_url else None
-                if target_doc:
-                    print(f"[Agent 6] Case {defect.case_id}: Providing target document from {defect.source_url}")
-                
-                issue, tokens_used = self._generate_issue_for_defect(defect, env_context, target_doc)
-                
-                if issue is None:
-                    print(f"[Agent 6] Warning: LLM returned None for Case {defect.case_id}. Skipping Issue generation.")
-                    self._apply_verifier_outcome(defect, "failed", "Issue generation returned None; cannot verify MRE.")
-                    continue
-                    
-                state.total_tokens_used += tokens_used
-                
-                mre_code = self._extract_mre_code(issue.body_markdown)
-                if mre_code:
-                    mre_code = self._inject_real_vectors(mre_code, defect)
-                    defect.mre_code = mre_code
-                    status, v_log = self._verify_mre(mre_code, defect.case_id, defect.bug_type)
-                    self._apply_verifier_outcome(defect, status, v_log)
-                else:
-                    self._apply_verifier_outcome(defect, "failed", "No MRE code block found in generated issue.")
-
-                if defect.reproduced_bug:
-                    filename = os.path.join(run_dir, f"GitHub_Issue_{defect.case_id}.md")
-                    with open(filename, "w", encoding="utf-8") as f:
-                        f.write(f"# {issue.title}\n\n")
-                        f.write(issue.body_markdown)
-                    defect.issue_url = filename
-                else:
-                    defect.issue_url = None
-                
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_process_single_defect, defect)
+                    result_defect, tokens_used = future.result(timeout=_DEFECT_TIMEOUT)
+                    state.total_tokens_used += tokens_used
+            except FuturesTimeoutError:
+                print(f"[Agent 6] Timeout ({_DEFECT_TIMEOUT}s) processing Case {defect.case_id}. Marking as timeout.")
+                defect.verification_status = "failed"
+                defect.verification_log = f"Processing timed out after {_DEFECT_TIMEOUT}s"
+                defect.reproduced_bug = False
+                defect.is_verified = False
+                defect.false_positive = False
+                defect.verifier_verdict = "timeout"
+                defect.issue_url = None
             except Exception as e:
                 print(f"[Agent 6] Failed to generate issue for {defect.case_id}: {e}")
                 self._apply_verifier_outcome(defect, "failed", f"Issue generation/verification failed: {e}")
                 defect.issue_url = None
                 
         state.defect_reports = unique_defects
-        state.verified_defects = [d for d in unique_defects if getattr(d, "reproduced_bug", False)]
+
+        for defect in unique_defects:
+            verdict = getattr(defect, 'verifier_verdict', None) or ""
+            if verdict and verdict != "pending":
+                continue
+            print(f"[Agent 6] Case {defect.case_id}: Verdict is '{verdict or 'unset'}', applying degraded output.")
+            defect.verification_status = "degraded"
+            defect.verification_log = "LLM verification did not complete; generating basic issue from available data."
+            defect.reproduced_bug = False
+            defect.is_verified = False
+            defect.false_positive = False
+            defect.verifier_verdict = "degraded"
+            mre_code = getattr(defect, 'mre_code', None)
+            if mre_code:
+                filename = os.path.join(run_dir, f"GitHub_Issue_{defect.case_id}.md")
+                try:
+                    with open(filename, "w", encoding="utf-8") as f:
+                        f.write(f"# Defect Report (Degraded) — Case {defect.case_id}\n\n")
+                        f.write(f"**Bug Type:** {getattr(defect, 'bug_type', 'unknown')}\n\n")
+                        f.write(f"**Status:** Degraded output — LLM verification did not complete.\n\n")
+                        f.write("## MRE Code\n\n```python\n")
+                        f.write(mre_code)
+                        f.write("\n```\n")
+                    defect.issue_url = filename
+                    print(f"[Agent 6] Case {defect.case_id}: Wrote degraded issue to {filename}")
+                except Exception as ex:
+                    print(f"[Agent 6] Case {defect.case_id}: Failed to write degraded issue: {ex}")
+                    defect.issue_url = None
+            else:
+                defect.issue_url = None
+        
+        # Filter out confirmed false positives from verified defects before returning
+        import logging
+        _logger = logging.getLogger(__name__)
+        
+        original_verified_count = len(state.verified_defects) if hasattr(state, 'verified_defects') else 0
+        filtered_verified = []
+        fp_filtered = []
+        
+        for d in unique_defects:
+            if not getattr(d, 'reproduced_bug', False):
+                continue
+            
+            verdict = getattr(d, 'verifier_verdict', '')
+            is_fp = getattr(d, 'false_positive', False)
+            
+            if verdict == 'expected_rejection' and is_fp:
+                # This is a confirmed false positive — DB correctly rejected invalid input
+                fp_filtered.append(d)
+                continue
+            
+            filtered_verified.append(d)
+        
+        if fp_filtered:
+            _logger.info(f"[Agent 6] Filtered {len(fp_filtered)} false positive(s) from {original_verified_count} total verified issues")
+            for fp_d in fp_filtered:
+                _logger.info(f"[Agent 6]   Filtered FP: {fp_d.case_id} (verdict={fp_d.verifier_verdict})")
+            # Also remove the .md file if it was already written
+            for fp_d in fp_filtered:
+                if hasattr(fp_d, 'issue_url') and fp_d.issue_url and os.path.exists(fp_d.issue_url):
+                    try:
+                        os.remove(fp_d.issue_url)
+                        _logger.info(f"[Agent 6] Removed issue file for FP: {fp_d.issue_url}")
+                    except Exception:
+                        pass
+        
+        state.verified_defects = filtered_verified
         return state
 
 def agent6_defect_verifier(state: WorkflowState) -> WorkflowState:

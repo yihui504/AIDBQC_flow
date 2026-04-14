@@ -1,0 +1,12 @@
+- [x] 根目录无一次性分析脚本（_analyze_*.py, _collect_issues.py, _deep_analysis.py, _extract_overview_data.py, _final_analysis.py, _run_verification.py 已删除）
+- [x] 根目录无数据产物（_issue_candidates.json, overview_data.json, project_overview.html 已删除）
+- [x] 根目录无过时工具文件（get-pip.py, *_blueprint.json, rollback_*.sh 已删除）
+- [x] 根目录无过时报告（AUDIT_REPORT_V3.3.md, AUDIT_REPORT_V3.4.md, PROJECT_STATUS_REPORT_V3.2.md 已删除）
+- [x] venv_run/ 旧虚拟环境已删除
+- [x] scripts/ 目录中无一次性脚本（_analyze_defects.py, _regenerate_issues.py, check_defects.py, finish_remaining_issues.py, manual_issue_generator.py, regenerate_failed_issues.py 已删除）
+- [x] .omc/ 和 .claude/ 过时工具目录已删除
+- [x] .trae/documents/ 中过时交接文档已删除
+- [x] docs/superpowers/ 目录已删除
+- [x] docs/TECHNICAL_REPORT.md 版本号已更新为 v4.5
+- [x] .gitignore 已添加新的忽略规则（venv_run/, .omc/, .claude/, docs/superpowers/ 等）
+- [x] README.md 项目结构树与实际文件系统一致

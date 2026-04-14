@@ -5,13 +5,13 @@
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-Pipeline-orange.svg)](https://langchain-ai.github.io/langgraph/)
 [![Milvus](https://img.shields.io/badge/Milvus-v2.6.12-green.svg)](https://milvus.io/)
-[![Version](https://img.shields.io/badge/Version-v4.4-brightgreen.svg)](#v44-验证结果)
+[![Version](https://img.shields.io/badge/Version-v4.5-brightgreen.svg)](#v45-验证结果)
 
 ---
 
 ## 项目简介
 
-**AI-DB-QC** (AI-driven Database Quality Control) 是一套基于 LLM 多智能体 (Multi-Agent) 流水线的向量数据库自动化质量检测系统。系统以 **Milvus** 为主要检测目标，通过自主编排的 Agent 管道自动完成以下全流程工作：
+**AI-DB-QC** (AI-driven Database Quality Control) 是一套基于 LLM 多智能体 (Multi-Agent) 流水线的向量数据库自动化质量检测系统。系统以 **Milvus / Qdrant / Weaviate** 等向量数据库为检测目标，通过自主编排的 Agent 管道自动完成以下全流程工作：
 
 1. **环境拉起与文档获取** -- 自动搜索、爬取目标数据库版本的官方文档，并通过 Docker Compose 部署测试实例
 2. **契约分析与测试生成** -- 从文档和业务场景中提取三层契约（L1 API / L2 语义 / L3 应用），并据此生成多维测试用例（含对抗样本）
@@ -29,7 +29,7 @@
 ### Agent 流水线
 
 ```
-Agent0 (Recon)                                                    用户输入: "深度测试 Milvus v2.6.12"
+Agent0 (Recon)                                                    用户输入: "深度测试 Milvus/Qdrant/Weaviate"
     |                                                              |
     |  文档预处理 (缓存优先) + Docker 环境拉起                      |
     v                                                              v
@@ -164,6 +164,12 @@ DocsConfig.source 选择
 - **Token 预算熔断**: 全局 Token 消耗达到阈值时优雅终止
 - **Recovery 机制**: 连续失败触发自动恢复流程
 - **Docker 日志抓取**: 缺陷发现时自动采集容器深度日志作为补充证据
+- **增强版去重 (EnhancedDeduplicator)**: 多维度相似度计算，避免重复 Issue 生成
+- **MRE 隔离执行器 (IsolatedCodeRunner)**: Docker 容器隔离执行最小复现代码，确保安全性与可复现性
+- **真实向量注入 (EmbeddingGenerator)**: 替换占位符向量，使用真实嵌入向量进行测试
+- **文档参考验证器 (ReferenceValidator)**: 验证测试结果是否符合文档参考数据
+- **Docker 容器连接池 (DockerContainerPool)**: 高效管理与复用 Docker 容器实例
+- **状态压缩存储 (CompressionUtils)**: gzip/zlib 压缩算法优化大体积 WorkflowState 持久化
 
 ---
 
@@ -174,8 +180,8 @@ DocsConfig.source 选择
 | 组件 | 版本要求 | 说明 |
 |------|----------|------|
 | Python | >= 3.8 | 推荐 3.11 |
-| Docker | >= 20.10 | 用于运行 Milvus 测试实例 |
-| Docker Compose | >= 2.0 | 用于编排 Milvus 集群 (etcd + minio + standalone) |
+| Docker | >= 20.10 | 用于运行向量数据库测试实例 (Milvus/Qdrant/Weaviate) |
+| Docker Compose | >= 2.0 | 用于编排测试集群 |
 | GPU (可选) | CUDA 支持 | 加速 SentenceTransformer / Cross-Encoder 推理 |
 
 ### 安装步骤
@@ -215,7 +221,7 @@ cp .env.example .env
 python main.py
 ```
 
-程序将自动完成以下流程：文档爬取/加载 -> Milvus Docker 环境拉起 -> 多轮 Agent 协作测试 -> 缺陷发现与分类 -> GitHub Issue 生成。
+程序将自动完成以下流程：文档爬取/加载 -> 向量数据库 Docker 环境拉起 -> 多轮 Agent 协作测试 -> 缺陷发现与分类 -> GitHub Issue 生成。
 
 ### 输出位置
 
@@ -231,14 +237,14 @@ python main.py
 
 ---
 
-## v4.4 验证结果
+## v4.5 验证结果
 
 ### 测试概况
 
 | 指标 | 值 |
 |------|-----|
 | Run ID | `run_0a79d4f2` |
-| 版本 | v4.4 |
+| 版本 | v4.5 |
 | 退出码 | 0 (成功) |
 | 总耗时 | ~15.5 分钟 |
 | 迭代轮次 | 4 轮 |
@@ -253,6 +259,18 @@ python main.py
 | **Type-2.PF** (前置条件失败) | 0 | 0% | v4.4 已修复 |
 | **Type-1** (非法成功) | 0 | 0% | -- |
 | **Type-3** (传统预言机违规) | 0 | 0% | -- |
+
+### v4.5 关键更新: 多数据库支持与能力增强
+
+**v4.5 版本在 v4.4 基础上进行了以下重要更新：**
+
+- **多数据库支持**: 系统现支持 Milvus、Qdrant、Weaviate 三种主流向量数据库
+- **增强版去重**: 新增 EnhancedDeduplicator，支持多维度相似度计算
+- **MRE 隔离执行器**: 新增 IsolatedCodeRunner，支持 Docker 容器隔离执行
+- **真实向量注入**: 新增 EmbeddingGenerator，支持真实嵌入向量测试
+- **文档参考验证器**: 新增 ReferenceValidator，验证测试结果符合参考数据
+- **容器连接池优化**: 新增 DockerContainerPool，提升容器管理效率
+- **状态压缩存储**: 新增 CompressionUtils，支持 gzip/zlib 压缩
 
 ### v4.4 关键修复: L2 门控状态传播 Bug
 
@@ -274,7 +292,7 @@ ralph/
 │
 ├── src/
 │   ├── graph.py                     # LangGraph StateGraph 流水线编排 (条件路由定义)
-│   ├── state.py                     # WorkflowState (Pydantic): 全局状态模型定义
+│   ├── state.py                     # WorkflowState (Pydantic): 全局状态模型定义 + 工具类 (CompressionUtils / DockerContainerPool / StateManager)
 │   ├── config.py                    # 配置管理: AppConfig / ConfigLoader (YAML + Env)
 │   ├── contract_fallbacks.py        # 契约回退系统: MilvusContractDefaults
 │   ├── telemetry.py                 # 遥测系统: TelemetryEvent / telemetry_sink
@@ -299,7 +317,7 @@ ralph/
 │   │   └── agent_factory.py          # Agent 工厂: 统一创建与管理
 │   │
 │   ├── adapters/                    # 数据库适配器层
-│   │   └── db_adapter.py            # 统一 DB 接口: MilvusAdapter / QdrantAdapter
+│   │   └── db_adapter.py            # 统一 DB 接口: MilvusAdapter / QdrantAdapter / WeaviateAdapter
 │   │
 │   ├── oracles/                     # 语义预言机模块
 │   │   ├── enhanced_semantic_oracle.py  # LLM 语义预言机实现
@@ -316,7 +334,7 @@ ralph/
 │   │   └── doc_parser.py            # 文档内容解析
 │   │
 │   ├── pools/                       # 资源池管理
-│   │   └── collection_pool.py       # Milvus Collection 连接池
+│   │   └── collection_pool.py       # Collection 连接池管理
 │   │
 │   ├── validators/                  # 验证器
 │   │   └── reference_validator.py   # 参考数据验证
@@ -337,11 +355,8 @@ ralph/
 │   │   ├── cross_database_validation.py # 跨库验证
 │   │   └── stability_testing.py     # 稳定性测试
 │   │
-│   └── generators/                  # 代码生成器
-│       └── mre_generator.py        # 最小复现代码生成
-│
 ├── configs/                         # 数据库连接配置文件
-├── scripts/                         # 工具脚本
+├── scripts/                         # 工具脚本 (test_qdrant_adapter.py, test_weaviate_adapter.py, monitor_progress.py, realtime_monitor.py)
 ├── tests/                           # 单元测试
 │
 ├── .trae/                           # 运行时目录 (gitignored)
@@ -355,8 +370,10 @@ ralph/
 │           ├── telemetry.jsonl
 │           └── GitHub_Issue_*.md
 │
-├── AGENTS.md                        # 详细 Agent 架构设计文档 (v4.4)
+├── AGENTS.md                        # 详细 Agent 架构设计文档 (v4.5)
 ├── docker-compose.milvus.yml        # Milvus Docker 编排文件 (etcd + minio + standalone)
+├── docker-compose.qdrant.yml        # Qdrant Docker 编排文件
+├── docker-compose.weaviate.yml      # Weaviate Docker 编排文件
 ├── requirements.txt                 # Python 依赖清单
 └── .env                             # 环境变量 (API Keys 等, 不入库)
 ```
@@ -383,11 +400,19 @@ ralph/
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `DB_TYPE` | 数据库类型 | `milvus` |
+| `DB_TYPE` | 数据库类型: `milvus` / `qdrant` / `weaviate` | `milvus` |
 | `DB_HOST` | 数据库地址 | `localhost` |
-| `DB_PORT` | 数据库端口 | `19530` |
+| `DB_PORT` | 数据库端口 (Milvus: 19530, Qdrant: 6333, Weaviate: 8081) | `19530` |
 | `DB_USERNAME` | 用户名 | (可选) |
 | `DB_PASSWORD` | 密码 | (可选) |
+
+**支持的向量数据库：**
+
+| 数据库 | 默认端口 | 适配器类 | Docker 编排文件 |
+|--------|----------|----------|----------------|
+| **Milvus** | 19530 | MilvusAdapter | [docker-compose.milvus.yml](docker-compose.milvus.yml) |
+| **Qdrant** | 6333 | QdrantAdapter | [docker-compose.qdrant.yml](docker-compose.qdrant.yml) |
+| **Weaviate** | 8081 | WeaviateAdapter | [docker-compose.weaviate.yml](docker-compose.weaviate.yml) |
 
 ### Harness (流水线) 配置
 
@@ -395,8 +420,29 @@ ralph/
 |--------|------|--------|
 | `harness.max_token_budget` | 最大 Token 预算 | `1000000` |
 | `harness.max_iterations` | 最大迭代轮次 | `4` |
+| `harness.target_db_input` | 本轮目标数据库输入 | `Weaviate 1.36.9` |
 | `harness.max_consecutive_failures` | 连续失败阈值 (触发 Recovery) | `3` |
 | `harness.similarity_threshold` | 语义相似度阈值 (防退化) | `0.9` |
+
+### Run Guard（禁止降级/模拟路径）
+
+| 键路径 | 说明 | 默认值 |
+|--------|------|--------|
+| `run_guard.enabled` | 启用运行守卫 | `true` |
+| `run_guard.enforce_weaviate_1369` | 强制目标为 Weaviate 1.36.9 | `true` |
+| `run_guard.enforce_max_iterations_4` | 强制最大轮次为 4 | `true` |
+| `run_guard.forbidden_terms` | 禁止出现的降级/模拟关键词 | `["degraded","fallback","simulate","simulation","mock","fake","降级","替代","模拟"]` |
+
+### 实时监控脚本（CPU/内存/网络/日志/异常栈）
+
+```bash
+python scripts/realtime_monitor.py --interval 5 --cpu-threshold 85 --mem-threshold 85 --net-threshold 100 --warmup-seconds 30 --consecutive-breach-threshold 3
+```
+
+- 指标时间序列输出：`.trae/runs/monitoring/realtime_metrics_*.jsonl`
+- 告警快照输出：`.trae/runs/monitor_alerts/alert_snapshot_*.json`（仅连续超阈触发中断告警时落盘）
+- `warmup_seconds`：预热窗口，忽略启动/文档抓取峰值导致的瞬时超阈
+- `consecutive_breach_threshold`：连续超阈阈值，达到次数才触发中断告警
 
 ### 文档配置
 
@@ -420,7 +466,7 @@ ralph/
 | **LLM** | Anthropic Claude / DeepSeek / 智谱 AI | 语义理解、测试生成、预言机验证、缺陷分类 |
 | **向量嵌入** | SentenceTransformers (all-MiniLM-L6-v2) | 查询向量化、缺陷去重相似度计算 |
 | **重排序** | Cross-Encoder (ms-marco-MiniLM-L-6-v2) | Top-K 搜索结果语义重排序 |
-| **向量数据库** | pymilvus 2.3.6 / qdrant-client 1.8.0 | 目标被测数据库 |
+| **向量数据库** | pymilvus 2.3.6 / qdrant-client 1.8.0 / weaviate-client 3.x | 目标被测数据库 (Milvus/Qdrant/Weaviate) |
 | **知识库** | ChromaDB | 缺陷知识存储、混合搜索 |
 | **爬虫引擎** | Crawl4AI | 官方文档深度爬取 (BFS 最多 3 层) |
 | **容器化** | Docker + docker-compose | Milvus 测试环境隔离部署 |
@@ -436,12 +482,20 @@ ralph/
 | [AGENTS.md](AGENTS.md) | 详细 Agent 架构设计文档 (含 Mermaid 时序图、决策树、数据接口定义) |
 | [.trae/specs/SPECS_INDEX.md](.trae/specs/SPECS_INDEX.md) | 开发规格索引与版本演进历史 |
 | [docker-compose.milvus.yml](docker-compose.milvus.yml) | Milvus v2.6.12 测试环境 Docker 编排文件 |
+| [docker-compose.qdrant.yml](docker-compose.qdrant.yml) | Qdrant 测试环境 Docker 编排文件 |
+| [docker-compose.weaviate.yml](docker-compose.weaviate.yml) | Weaviate 测试环境 Docker 编排文件 |
 | [src/graph.py](src/graph.py) | LangGraph 流水线图定义 (节点与边的声明) |
-| [src/state.py](src/state.py) | WorkflowState Pydantic 模型 (全局状态 Schema) |
+| [src/state.py](src/state.py) | WorkflowState Pydantic 模型 (全局状态 Schema + 工具类) |
 | [src/config.py](src/config.py) | 配置管理系统 (AppConfig + ConfigLoader) |
 | [src/agents/agent3_executor.py](src/agents/agent3_executor.py) | L1/L2 双层门控执行器 (核心安全机制) |
 | [src/agents/agent5_diagnoser.py](src/agents/agent5_diagnoser.py) | 四型缺陷分类决策树实现 |
 | [src/contract_fallbacks.py](src/contract_fallbacks.py) | 契约回退系统 (MilvusContractDefaults) |
+| [src/adapters/db_adapter.py](src/adapters/db_adapter.py) | 数据库适配器层 (Milvus/Qdrant/Weaviate 统一接口) |
+| [src/defects/enhanced_deduplicator.py](src/defects/enhanced_deduplicator.py) | 增强版去重器 (多维度相似度计算) |
+| [src/pools/collection_pool.py](src/pools/collection_pool.py) | Collection 连接池管理 |
+| [src/validators/reference_validator.py](src/validators/reference_validator.py) | 参考数据验证器 |
+| [src/context/handoff.py](src/context/handoff.py) | Agent 间交接协议 |
+| [src/alerting/alert_manager.py](src/alerting/alert_manager.py) | 告警管理器 |
 
 ---
 

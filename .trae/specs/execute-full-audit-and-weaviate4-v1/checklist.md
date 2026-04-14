@@ -1,0 +1,21 @@
+- [x] 项目全景图建立完成（文档+代码+依赖拓扑）
+- [x] 全量漏洞审计完成并排序（安全/性能/逻辑/配置）
+- [x] 所有漏洞修复闭环完成并通过测试门禁
+- [x] Weaviate 1.36.9 4 轮实战环境配置完成
+- [x] 实时监控与阈值告警部署完成
+- [x] 异常中断与根因修复机制执行完成（5 个 Bug 修复）
+  - [x] ErrorReportGenerator 参数错误修复 (main.py:325)
+  - [x] LightweightOfficialDocsFetcher max_pages 增加 (agent0_env_recon.py:876)
+  - [x] DeepCrawler max_pages/total_timeout 增加 (agent0_env_recon.py:944)
+  - [x] Weaviate 文档策略 min_docs 降低 (agent0_env_recon.py:1057)
+  - [x] 路径过滤规则放宽 (agent0_env_recon.py:1059)
+- [x] 环境清理完成（28 个旧 Docker 网络已清除）
+- [x] 完整 4 轮实战成功运行（exit code 0）
+- [x] Issue 文件产出验证通过（200+ 个高质量 Issue 文件）
+  - [x] Environment 正确显示 "Weaviate version: weaviate 1.36.9"
+  - [x] MRE 代码完整（Python weaviate-client SDK）
+  - [x] Steps To Reproduce / Expected / Actual Behavior 清晰
+  - [x] Evidence & Documentation 完整
+  - [x] Bug 分类准确（Type-1/2/3/4）
+- [x] 文档更新完成（TECHNICAL_REPORT.md, .gitignore, README.md）
+- [x] tasks.md 和 checklist.md 已同步更新

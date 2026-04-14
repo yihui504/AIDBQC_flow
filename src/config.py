@@ -133,7 +133,10 @@ class DocsConfig(BaseSettings):
     )
 
     source: str = Field(default="auto", description="Documentation source (auto, local_jsonl, crawl)")
-    local_jsonl_path: str = Field(default=".trae/cache/milvus_io_docs_depth3.jsonl", description="Path to local JSONL docs library")
+    local_jsonl_path: str = Field(
+        default=".trae/cache/{db_name}_io_docs_depth3.jsonl",
+        description="Path template to local JSONL docs library (supports {db_name})",
+    )
     
     # Cache settings
     cache_enabled: bool = Field(default=True, description="Enable document caching")

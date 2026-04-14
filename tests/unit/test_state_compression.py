@@ -196,6 +196,56 @@ class TestStateManagerCompression:
                 expected = float(i * 128 + j) / 500.0
                 assert abs(val - expected) < 1e-6
 
+    def test_save_state_with_mixed_dimension_history_vectors_normalizes_before_compress(self):
+        """Mixed dimensions should be normalized before vector compression."""
+        state = WorkflowState(
+            run_id="test-run-mixed-dims",
+            target_db_input="Milvus"
+        )
+        state.history_vectors = [
+            [1.0, 2.0, 3.0, 4.0],      # dim=4
+            [5.0, 6.0],                # dim=2 -> pad
+            [7.0, 8.0, 9.0, 10.0],     # dim=4
+            [11.0, 12.0, 13.0, 14.0, 15.0]  # dim=5 -> truncate (mode dim=4)
+        ]
+
+        # Should not raise "All vectors must have the same dimension"
+        stats = self.manager.save_state("test-run-mixed-dims", state)
+        assert stats["compressed_size"] > 0
+
+        loaded_state = self.manager.load_state("test-run-mixed-dims")
+        assert loaded_state is not None
+        assert len(loaded_state.history_vectors) == 4
+        assert all(len(v) == 4 for v in loaded_state.history_vectors)
+
+        # Verify pad/truncate behavior
+        assert loaded_state.history_vectors[1] == [5.0, 6.0, 0.0, 0.0]  # padded
+        assert loaded_state.history_vectors[3] == [11.0, 12.0, 13.0, 14.0]  # truncated
+
+    def test_save_state_mixed_dimensions_keeps_main_flow_final_save_safe(self):
+        """Simulate main final save path: save should succeed even with mixed dimensions."""
+        state = WorkflowState(
+            run_id="test-run-final-save-safe",
+            target_db_input="Weaviate"
+        )
+        state.iteration_count = 3
+        state.total_tokens_used = 12345
+        state.history_vectors = [
+            [0.1, 0.2, 0.3],
+            [0.4, 0.5, 0.6, 0.7],
+            [0.8],
+        ]
+
+        # Equivalent to main.py finally block save_state(...), should not throw.
+        stats = self.manager.save_state("test-run-final-save-safe", state)
+        assert stats["compressed_size"] > 0
+
+        reloaded = self.manager.load_state("test-run-final-save-safe")
+        assert reloaded is not None
+        assert reloaded.iteration_count == 3
+        assert reloaded.total_tokens_used == 12345
+        assert len(reloaded.history_vectors) == 3
+
     def test_save_load_state_with_large_datasets(self):
         """Test compression with large datasets."""
         state = WorkflowState(

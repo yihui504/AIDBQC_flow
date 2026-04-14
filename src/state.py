@@ -1,14 +1,16 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal, Tuple
 from pathlib import Path
 from pydantic import BaseModel, Field
 import gzip
 import zlib
+from collections import Counter
 import json
 import hashlib
 import struct
 import logging
-from datetime import datetime
+from datetime import datetime, date
 import time
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,22 @@ class ExecutionResult(BaseModel):
     underlying_logs: Optional[str] = Field(default=None, description="Logs captured directly from Docker for deep observability")
     l1_warning: Optional[str] = Field(default=None, description="L1 warning message for dimension mismatch - indicates potential Type-1 bug")
     l2_result: Optional[dict] = Field(default=None, description="L2 runtime readiness check result with passed/reason details")
+    l1_violation_details: Optional[Dict[str, Any]] = Field(default=None, description="Structured L1 violation info with violation_type, actual_value, expected_range, severity")
+
+class DimensionConstraint(BaseModel):
+    """Dual-mode dimension constraint extracted from official documentation."""
+    mode: Literal["list", "range"] = "range"
+    values: Optional[List[int]] = None
+    min: Optional[int] = None
+    max: Optional[int] = None
+
+    def contains(self, dimension: int) -> bool:
+        """Check if a dimension value satisfies this constraint."""
+        if self.mode == "list" and self.values is not None:
+            return dimension in self.values
+        lo = self.min if self.min is not None else 0
+        hi = self.max if self.max is not None else float('inf')
+        return lo <= dimension <= hi
 
 class OracleValidation(BaseModel):
     """Result from the Oracle Coordinator."""
@@ -59,6 +77,22 @@ class OracleValidation(BaseModel):
     passed: bool
     anomalies: List[Dict[str, Any]] = Field(default_factory=list)
     explanation: str = ""
+
+class L1Contract(BaseModel):
+    """L1 API Contracts (Strong constraints from docs)"""
+    allowed_dimensions: List[int] = Field(description="List of allowed vector dimensions")
+    dimension_constraint: Optional[DimensionConstraint] = Field(
+        default=None,
+        description="Dual-mode dimension constraint (list or range) from official docs"
+    )
+    supported_metrics: List[str] = Field(description="Supported distance metrics (e.g., L2, IP, COSINE)")
+    max_top_k: int = Field(description="Maximum allowed value for top_k parameter")
+    max_collection_name_length: int = Field(default=255, description="Maximum allowed length for collection names")
+    max_payload_size_bytes: int = Field(default=65535, description="Maximum payload size in bytes")
+    supported_index_types: List[str] = Field(default=["hnsw", "ivf_flat", "flat"], description="Supported indexing algorithms (lowercase, database-agnostic names)")
+    state_constraints: List[str] = Field(default=["collection_exists", "data_ready"], description="Pre-conditions for execution (database-agnostic: collection must exist, data/index must be ready)")
+    source_urls: Dict[str, str] = Field(default_factory=dict)
+    exhaustive_constraints: Dict[str, Any] = Field(default_factory=dict)
 
 class DefectReport(BaseModel):
     """Classified defect report."""
@@ -73,7 +107,8 @@ class DefectReport(BaseModel):
     operation: str = Field(default="", description="The operation that triggered the bug (e.g., search, insert)")
     error_message: str = Field(default="", description="The raw error message from the database")
     database: str = Field(default="", description="The target database name and version")
-    
+    l1_violation_details: Optional[Dict[str, Any]] = Field(default=None, description="L1 contract violation details propagated from execution result")
+
     is_verified: bool = False
     mre_code: Optional[str] = Field(default=None, description="Minimal Reproducible Example")
     issue_url: Optional[str] = None
@@ -114,6 +149,10 @@ class WorkflowState(BaseModel):
     history_vectors: List[List[float]] = Field(default_factory=list, description="Store historical vectors for semantic coverage tracking")
     
     # Control Flags & Budgets
+    from_scratch: bool = Field(
+        default=False,
+        description="If true, disables hot sandbox reuse and forces a fresh Docker environment startup"
+    )
     should_terminate: bool = Field(default=False, description="Flag to gracefully terminate the loop")
     total_tokens_used: int = Field(default=0, description="Cumulative tokens consumed by LLMs")
     max_token_budget: int = Field(default=100000, description="Maximum token budget before circuit breaking")
@@ -199,17 +238,73 @@ class CompressionUtils:
         num_vectors = len(vectors)
         dimension = len(vectors[0])
 
-        # Pack as binary floats (4 bytes each)
+        # Pack as binary floats.
+        #
+        # IMPORTANT:
+        # - Use float64 ("d", 8 bytes) to preserve precision for round-trips.
+        #   Unit tests expect <= 1e-6 absolute error which float32 may violate
+        #   for values around ~1e2.
         binary_data = struct.pack(f"!II", num_vectors, dimension)
         for vector in vectors:
             # Ensure all vectors have same dimension
             if len(vector) != dimension:
                 raise ValueError("All vectors must have the same dimension")
-            # Pack floats as 32-bit floats
-            binary_data += struct.pack(f"!{dimension}f", *vector)
+            # Pack floats as 64-bit floats
+            binary_data += struct.pack(f"!{dimension}d", *vector)
 
         # Compress the binary data
         return CompressionUtils.compress_data(binary_data, algorithm="gzip")
+
+    @staticmethod
+    def normalize_vectors(
+        vectors: List[List[float]],
+        target_dimension: Optional[int] = None,
+        pad_value: float = 0.0,
+    ) -> Tuple[List[List[float]], int]:
+        """
+        Normalize vectors to a fixed dimension via pad/truncate.
+
+        Strategy:
+        - If target_dimension is provided, use it.
+        - Otherwise, infer the dominant (most frequent) non-zero dimension.
+          In case of tie, use the larger dimension to reduce truncation risk.
+
+        Args:
+            vectors: Raw vectors (potentially mixed dimensions)
+            target_dimension: Optional fixed target dimension
+            pad_value: Value used for right-padding shorter vectors
+
+        Returns:
+            (normalized_vectors, target_dimension)
+        """
+        if not vectors:
+            return [], 0
+
+        if target_dimension is None:
+            lengths = [len(v) for v in vectors if isinstance(v, list) and len(v) > 0]
+            if not lengths:
+                return [[] for _ in vectors], 0
+            length_counter = Counter(lengths)
+            max_freq = max(length_counter.values())
+            candidates = [dim for dim, freq in length_counter.items() if freq == max_freq]
+            target_dimension = max(candidates)
+
+        if target_dimension < 0:
+            raise ValueError("target_dimension must be >= 0")
+
+        normalized: List[List[float]] = []
+        for vector in vectors:
+            vec = list(vector) if isinstance(vector, list) else []
+            current_dim = len(vec)
+
+            if current_dim < target_dimension:
+                vec = vec + [pad_value] * (target_dimension - current_dim)
+            elif current_dim > target_dimension:
+                vec = vec[:target_dimension]
+
+            normalized.append(vec)
+
+        return normalized, target_dimension
 
     @staticmethod
     def decompress_vectors(compressed_data: bytes) -> List[List[float]]:
@@ -231,13 +326,13 @@ class CompressionUtils:
         # Unpack header
         num_vectors, dimension = struct.unpack("!II", binary_data[:8])
 
-        # Unpack vectors
+        # Unpack vectors (float64)
         vectors = []
         offset = 8
         for _ in range(num_vectors):
-            vector = list(struct.unpack(f"!{dimension}f", binary_data[offset:offset + dimension * 4]))
+            vector = list(struct.unpack(f"!{dimension}d", binary_data[offset:offset + dimension * 8]))
             vectors.append(vector)
-            offset += dimension * 4
+            offset += dimension * 8
 
         return vectors
 
@@ -545,40 +640,55 @@ class StateManager:
         state_file = run_dir / "state.json.gz"
         metadata_file = run_dir / "metadata.json"
 
-        # Custom encoder for datetime objects
+        # Custom encoder for datetime/date objects
         def json_serial(obj):
             """JSON serializer for objects not serializable by default json code"""
-            if isinstance(obj, (datetime.datetime, datetime.date)):
+            if isinstance(obj, (datetime, date)):
                 return obj.isoformat()
             raise TypeError(f"Type {type(obj)} not serializable")
 
         # Prepare state data
-        state_dict = state.model_dump()
+        # - original_state_dict: as-is for "original_size" estimation
+        # - state_dict: optimized payload to actually persist
+        original_state_dict = state.model_dump()
+        state_dict = dict(original_state_dict)
 
-        # Optimize large data structures
-        original_size = 0
-        compressed_size = 0
-
-        # Compress vectors separately for better compression ratio
+        # Compress vectors separately for both speed and better overall compression.
+        # Store as base64 to avoid hex expansion (2x) while keeping JSON-safe string.
+        vectors_meta: Dict[str, Any] = {}
         if state_dict.get("history_vectors"):
             vectors = state_dict["history_vectors"]
-            compressed_vectors = CompressionUtils.compress_vectors(vectors)
-            state_dict["history_vectors_compressed"] = compressed_vectors.hex()
+            normalized_vectors, target_dimension = CompressionUtils.normalize_vectors(vectors)
+            compressed_vectors = CompressionUtils.compress_vectors(normalized_vectors)
+            state_dict["history_vectors_compressed"] = base64.b64encode(compressed_vectors).decode("ascii")
             del state_dict["history_vectors"]
-            original_size += len(str(vectors))
-            compressed_size += len(compressed_vectors)
+            original_dimensions = sorted({len(v) for v in vectors if isinstance(v, list)})
+            vectors_meta = {
+                "format": "base64",
+                "algorithm": "gzip",
+                "dtype": "float64",
+                "target_dimension": target_dimension,
+                "original_dimensions": original_dimensions,
+                "normalized": len(original_dimensions) > 1,
+            }
 
         # Convert to JSON without indentation for better compression
-        json_data = json.dumps(state_dict, default=json_serial, separators=(',', ':'))
-        json_bytes = json_data.encode('utf-8')
+        original_json_bytes = json.dumps(
+            original_state_dict, default=json_serial, separators=(",", ":")
+        ).encode("utf-8")
+        optimized_json_bytes = json.dumps(
+            state_dict, default=json_serial, separators=(",", ":")
+        ).encode("utf-8")
 
-        original_size += len(json_bytes)
+        # Compress the optimized JSON payload
+        compressed_data = CompressionUtils.compress_data(optimized_json_bytes, self.compression_algorithm)
 
-        # Compress the JSON data
-        compressed_data = CompressionUtils.compress_data(json_bytes, self.compression_algorithm)
-        compressed_size += len(compressed_data)
-
-        # Calculate compression ratio
+        # Stats:
+        # - original_size: size of unoptimized JSON (incl. raw vectors) so compression ratio
+        #   reflects "what user would have stored" without optimization.
+        # - compressed_size: bytes actually persisted to disk.
+        original_size = len(original_json_bytes)
+        compressed_size = len(compressed_data)
         compression_ratio = (1 - compressed_size / original_size) * 100 if original_size > 0 else 0
 
         # Save compressed state
@@ -609,7 +719,8 @@ class StateManager:
             "compression_ratio": compression_ratio,
             "timestamp": datetime.now().isoformat(),
             "run_id": run_id,
-            "has_compressed_vectors": "history_vectors_compressed" in state_dict
+            "has_compressed_vectors": "history_vectors_compressed" in state_dict,
+            "vectors": vectors_meta or None,
         }
 
         # Handle incremental updates
@@ -689,10 +800,17 @@ class StateManager:
 
                 # Decompress vectors if present
                 if "history_vectors_compressed" in data:
-                    compressed_vectors_hex = data["history_vectors_compressed"]
-                    compressed_vectors = bytes.fromhex(compressed_vectors_hex)
+                    encoded = data["history_vectors_compressed"]
+                    # Backward compatible: accept both base64 (preferred) and hex (legacy)
+                    try:
+                        compressed_vectors = base64.b64decode(encoded.encode("ascii"), validate=True)
+                    except Exception:
+                        compressed_vectors = bytes.fromhex(encoded)
                     data["history_vectors"] = CompressionUtils.decompress_vectors(compressed_vectors)
                     del data["history_vectors_compressed"]
+                    if "vectors" in data:
+                        # metadata field; keep out of WorkflowState
+                        del data["vectors"]
 
                 return WorkflowState(**data)
 
@@ -808,7 +926,7 @@ class StateManager:
             "optimized": True,
             "old_size": old_size,
             "new_size": new_stats["compressed_size"],
-            "size_reduction": old_size - new_stats["new_size"],
+            "size_reduction": old_size - new_stats["compressed_size"],
             "improvement_ratio": (1 - new_stats["compressed_size"] / old_size) * 100 if old_size > 0 else 0
         }
 

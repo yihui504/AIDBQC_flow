@@ -37,11 +37,12 @@ database:
 # Harness Configuration
 # ============================================================================
 harness:
-  max_iterations: 10
+  max_iterations: 4
   max_token_budget: 100000
   max_consecutive_failures: 3
   similarity_threshold: 0.9
   history_limit: 100
+  target_db_input: "Weaviate 1.36.9"
 
   # Collection Pool
   pool_min_size: 3
@@ -52,6 +53,24 @@ harness:
   telemetry_enabled: true
   telemetry_dir: ".trae/runs"
   telemetry_file: "telemetry.jsonl"
+
+# ============================================================================
+# Runtime Guard Configuration
+# ============================================================================
+run_guard:
+  enabled: true
+  enforce_weaviate_1369: true
+  enforce_max_iterations_4: true
+  forbidden_terms:
+    - degraded
+    - fallback
+    - simulate
+    - simulation
+    - mock
+    - fake
+    - 降级
+    - 替代
+    - 模拟
 
 # ============================================================================
 # Agent Configuration (timeouts in seconds)

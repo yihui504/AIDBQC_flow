@@ -12,6 +12,7 @@ pydantic>=2.0.0
 # Vector Database Clients
 pymilvus==2.3.6
 qdrant-client==1.8.0
+weaviate-client>=4.0.0
 
 # Sandbox & Infrastructure
 docker==7.0.0
@@ -20,6 +21,7 @@ python-dotenv==1.0.1
 # Testing & QA
 pytest==8.1.1
 pytest-cov==5.0.0
+pytest-asyncio==0.23.6
 
 # NLP & Semantic Search
 sentence-transformers>=2.2.0

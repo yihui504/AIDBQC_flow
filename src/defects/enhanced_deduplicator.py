@@ -22,6 +22,8 @@ from enum import Enum
 from datetime import datetime
 from collections import defaultdict
 import hashlib
+import os
+import re
 
 from pydantic import BaseModel, Field
 import numpy as np
@@ -78,7 +80,7 @@ class InternalDefectReport:
     confidence: float = 0.8
 
     # Vector embedding (optional)
-    embedding: Optional[List[float]] = None
+    embedding: Optional[np.ndarray] = None
 
     # Metadata
     reported_at: datetime = field(default_factory=datetime.now)
@@ -212,15 +214,21 @@ class DefectSimilarityCalculator:
         self.structural_weight = structural_weight
         self.behavioral_weight = behavioral_weight
         self.contextual_weight = contextual_weight
-        
-        print(f"[DefectSimilarityCalculator] Loading embedding model: {model_name}...")
-        try:
-            from sentence_transformers import SentenceTransformer
-            self.model = SentenceTransformer(model_name)
-            print("[DefectSimilarityCalculator] Embedding model loaded.")
-        except Exception as e:
-            print(f"[DefectSimilarityCalculator] Warning: Could not load model ({e}). Fallback to Jaccard.")
-            self.model = None
+
+        # Offline-safe / deterministic by default:
+        # - Unit tests must pass without network access and without triggering model downloads.
+        # - Enable SentenceTransformer only when explicitly requested via env var and the model
+        #   is already available locally.
+        self.model = None
+        enable_embeddings = os.getenv("AI_DB_QC_ENABLE_EMBEDDINGS", "").strip().lower() in {"1", "true", "yes", "on"}
+        if enable_embeddings:
+            try:
+                from sentence_transformers import SentenceTransformer  # type: ignore
+                # If the environment is truly offline, HuggingFace honors HF_HUB_OFFLINE=1.
+                # We do not set it here to avoid surprising callers; we just fall back on errors.
+                self.model = SentenceTransformer(model_name)
+            except Exception:
+                self.model = None
 
     async def calculate_similarity(
         self,
@@ -238,7 +246,7 @@ class DefectSimilarityCalculator:
             SimilarityScore with all dimension scores
         """
         # Calculate individual dimensions
-        semantic_score = await self._semantic_similarity(defect1, defect2)
+        semantic_score = self._semantic_similarity(defect1, defect2)
         structural_score = self._structural_similarity(defect1, defect2)
         behavioral_score = self._behavioral_similarity(defect1, defect2)
         contextual_score = self._contextual_similarity(defect1, defect2)
@@ -268,65 +276,114 @@ class DefectSimilarityCalculator:
             differentiating_features=differentiating_features,
         )
 
-    async def _get_embedding(self, text: str) -> np.ndarray:
-        """Get embedding for text."""
-        if not self.model or not text:
-            return None
-        
-        # Run in thread pool to avoid blocking async loop
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.model.encode, text)
+    _TOKEN_RE = re.compile(r"[a-zA-Z0-9_]+")
 
-    async def _semantic_similarity(self, defect1: InternalDefectReport, defect2: InternalDefectReport) -> float:
-        """Calculate semantic similarity using text embeddings or fallback."""
-        text1 = " ".join([
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        """Normalize text deterministically for similarity computation."""
+        if not text:
+            return ""
+        return " ".join(text.lower().strip().split())
+
+    @classmethod
+    def _tokenize(cls, text: str) -> List[str]:
+        """Tokenize text deterministically (ASCII-ish word tokens)."""
+        if not text:
+            return []
+        return cls._TOKEN_RE.findall(text.lower())
+
+    @staticmethod
+    def _hashing_vector(tokens: List[str], dim: int = 256) -> np.ndarray:
+        """
+        Deterministic hashing vectorizer (no external deps, no downloads).
+
+        - Uses sha256(token) to map tokens into a fixed-size dense vector.
+        - Applies signed hashing to reduce collisions.
+        - L2-normalizes the output to enable cosine similarity.
+        """
+        if not tokens:
+            return np.zeros(dim, dtype=np.float32)
+
+        vec = np.zeros(dim, dtype=np.float32)
+        for tok in tokens:
+            h = hashlib.sha256(tok.encode("utf-8")).digest()
+            idx = int.from_bytes(h[:4], "little") % dim
+            sign = 1.0 if (h[4] & 1) == 0 else -1.0
+            vec[idx] += sign
+
+        norm = float(np.linalg.norm(vec))
+        if norm > 0:
+            vec /= norm
+        return vec
+
+    def _get_embedding(self, text: str) -> np.ndarray:
+        """
+        Get embedding for text.
+
+        By default this is a deterministic offline hashing vector.
+        If SentenceTransformer is enabled (AI_DB_QC_ENABLE_EMBEDDINGS=1) and available,
+        it will be used; failures fall back to hashing.
+        """
+        text = self._normalize_text(text)
+        if not text:
+            return np.zeros(256, dtype=np.float32)
+
+        if self.model is not None:
+            try:
+                # sentence-transformers returns np.ndarray when convert_to_numpy=True
+                emb = self.model.encode(text, convert_to_numpy=True, normalize_embeddings=True)
+                return np.asarray(emb, dtype=np.float32)
+            except Exception:
+                # Always remain functional offline / on missing model files
+                pass
+
+        tokens = self._tokenize(text)
+        # Add bigrams to improve robustness for short texts.
+        if len(tokens) >= 2:
+            tokens = tokens + [f"{a}_{b}" for a, b in zip(tokens, tokens[1:])]
+        return self._hashing_vector(tokens, dim=256)
+
+    def _semantic_similarity(self, defect1: InternalDefectReport, defect2: InternalDefectReport) -> float:
+        """Calculate semantic similarity deterministically (offline-safe)."""
+        text1 = self._normalize_text(" ".join([
             defect1.title,
             defect1.description,
             defect1.root_cause_analysis,
             defect1.error_message,
-        ]).lower()
-
-        text2 = " ".join([
+        ]))
+        text2 = self._normalize_text(" ".join([
             defect2.title,
             defect2.description,
             defect2.root_cause_analysis,
             defect2.error_message,
-        ]).lower()
+        ]))
 
-        if self.model:
-            # Check if embeddings are already computed
-            if defect1.embedding is None:
-                defect1.embedding = await self._get_embedding(text1)
-            if defect2.embedding is None:
-                defect2.embedding = await self._get_embedding(text2)
-            
-            if defect1.embedding is not None and defect2.embedding is not None:
-                # Cosine similarity
-                vec1 = defect1.embedding
-                vec2 = defect2.embedding
-                similarity = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
-                return float(similarity)
-
-        # Fallback: Word overlap
-        words1 = set(text1.split())
-        words2 = set(text2.split())
-
-        if not words1 or not words2:
+        if not text1 or not text2:
             return 0.0
 
-        intersection = words1 & words2
-        union = words1 | words2
+        # Fast path: identical normalized text
+        if text1 == text2:
+            return 1.0
 
-        jaccard = len(intersection) / len(union) if union else 0.0
+        # Cache embeddings on defect objects to speed up repeated comparisons.
+        if defect1.embedding is None:
+            defect1.embedding = self._get_embedding(text1)
+        if defect2.embedding is None:
+            defect2.embedding = self._get_embedding(text2)
 
-        # Boost for exact matches on key fields
+        vec1 = defect1.embedding
+        vec2 = defect2.embedding
+        denom = float(np.linalg.norm(vec1) * np.linalg.norm(vec2))
+        base = float(np.dot(vec1, vec2) / denom) if denom > 0 else 0.0
+
+        # Deterministic boosts for key exact matches (keeps previous intent).
         boost = 0.0
-        if defect1.root_cause_analysis == defect2.root_cause_analysis:
+        if defect1.root_cause_analysis and defect1.root_cause_analysis == defect2.root_cause_analysis:
             boost += 0.3
-        if defect1.error_code == defect2.error_code and defect1.error_code:
+        if defect1.error_code and defect1.error_code == defect2.error_code:
             boost += 0.2
 
-        return min(1.0, jaccard + boost)
+        return float(max(0.0, min(1.0, base + boost)))
 
     def _structural_similarity(self, defect1: InternalDefectReport, defect2: InternalDefectReport) -> float:
         """Calculate structural similarity based on code/structure features."""

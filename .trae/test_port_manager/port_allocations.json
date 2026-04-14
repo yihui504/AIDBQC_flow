@@ -1,0 +1,12 @@
+{
+  "9000": {
+    "port": 9000,
+    "allocated_at": "2026-04-14T12:58:32.509578",
+    "allocated_by": "test_script",
+    "run_id": null,
+    "container_id": null,
+    "purpose": "testing",
+    "is_active": false,
+    "last_heartbeat": "2026-04-14T12:58:32.509578"
+  }
+}

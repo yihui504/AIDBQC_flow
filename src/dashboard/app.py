@@ -32,7 +32,30 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.state import StateManager
-from src.roadmap import Roadmap
+from src.roadmap import Roadmap, Phase
+def load_run_data(runs_dir: str = ".trae/runs") -> List[Dict[str, Any]]:
+    """Load run data from .trae/runs directory."""
+    runs_path = Path(runs_dir)
+    if not runs_path.exists():
+        return []
+    runs = []
+    for run_dir in sorted(runs_path.iterdir()):
+        if run_dir.is_dir() and run_dir.name.startswith("run_"):
+            state_file = run_dir / "state.json"
+            telemetry_file = run_dir / "telemetry.jsonl"
+            run_info = {"run_id": run_dir.name, "path": str(run_dir)}
+            if state_file.exists():
+                try:
+                    run_info["state"] = json.loads(state_file.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            if telemetry_file.exists():
+                try:
+                    run_info["telemetry_lines"] = sum(1 for _ in telemetry_file.open(encoding="utf-8"))
+                except Exception:
+                    pass
+            runs.append(run_info)
+    return runs
 
 
 # ============================================================================
@@ -129,42 +152,37 @@ class DataManager:
     """Manages dashboard data from state files."""
 
     def __init__(self):
-        self.state_manager = StateManager()
-        self.roadmap = Roadmap()
+        self.state_manager = StateManager(base_dir=".trae/runs")
+        self.roadmap = Roadmap.get_instance()
 
     def get_run_data(self, run_id: str) -> Optional[Dict[str, Any]]:
         """Get data for a specific run."""
-        state_file = Path(f"runs/{run_id}/state.json")
-        if not state_file.exists():
+        state = self.state_manager.load_state(run_id)
+        if state is None:
             return None
-
-        with open(state_file, 'r') as f:
-            return json.load(f)
+        return state.model_dump()
 
     def get_all_runs(self) -> List[Dict[str, Any]]:
         """Get all available runs."""
-        runs_dir = Path("runs")
+        runs_dir = Path(self.state_manager.base_dir)
         if not runs_dir.exists():
             return []
 
         runs = []
-        for run_dir in runs_dir.iterdir():
-            if run_dir.is_dir():
-                state_file = run_dir / "state.json"
-                if state_file.exists():
-                    with open(state_file, 'r') as f:
-                        data = json.load(f)
-                        runs.append({
-                            "run_id": run_dir.name,
-                            **data
-                        })
+        for run_id in self.state_manager.list_runs():
+            data = self.get_run_data(run_id)
+            if data is not None:
+                runs.append({
+                    "run_id": run_id,
+                    **data
+                })
 
         return sorted(runs, key=lambda x: x.get("start_time", ""), reverse=True)
 
     def get_roadmap_progress(self) -> Dict[str, Any]:
         """Get roadmap progress data."""
         phases = {}
-        for phase in self.roadmap.phases:
+        for phase in Phase:
             phase_name = phase.value
             tasks = self.roadmap.get_tasks_by_phase(phase)
 

@@ -40,7 +40,8 @@ class RerankerAgent:
             if isinstance(payload, str):
                 try:
                     payload = json.loads(payload)
-                except:
+                except json.JSONDecodeError:
+                    # Keep original string payload; reranker will skip non-dict payloads.
                     pass
             
             # Try to find text in payload

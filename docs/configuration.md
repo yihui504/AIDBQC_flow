@@ -50,7 +50,7 @@ DB_HOST=localhost
 DB_PORT=19530
 
 # Harness Configuration
-HARNESS_MAX_ITERATIONS=10
+HARNESS_MAX_ITERATIONS=4
 HARNESS_MAX_TOKEN_BUDGET=100000
 ```
 
@@ -70,8 +70,14 @@ database:
   port: 19530
 
 harness:
-  max_iterations: 10
+  max_iterations: 4
   max_token_budget: 100000
+  target_db_input: "Weaviate 1.36.9"
+
+run_guard:
+  enabled: true
+  enforce_weaviate_1369: true
+  enforce_max_iterations_4: true
 ```
 
 Then load it:
@@ -137,11 +143,22 @@ Controls the workflow/fuzzing behavior.
 
 | Environment Variable | YAML Path | Default | Description |
 |---------------------|-----------|---------|-------------|
-| `HARNESS_MAX_ITERATIONS` | `harness.max_iterations` | `10` | Maximum fuzzing iterations |
+| `HARNESS_MAX_ITERATIONS` | `harness.max_iterations` | `4` | Maximum fuzzing iterations |
 | `HARNESS_MAX_TOKEN_BUDGET` | `harness.max_token_budget` | `100000` | Maximum token budget |
 | `HARNESS_MAX_CONSECUTIVE_FAILURES` | `harness.max_consecutive_failures` | `3` | Max failures before recovery |
 | `HARNESS_SIMILARITY_THRESHOLD` | `harness.similarity_threshold` | `0.9` | Mode collapse threshold |
 | `HARNESS_HISTORY_LIMIT` | `harness.history_limit` | `100` | Max history vectors |
+
+### Runtime Guard Configuration
+
+用于禁止降级/替代/模拟路径的 fail-closed 运行守卫。
+
+| YAML Path | Default | Description |
+|-----------|---------|-------------|
+| `run_guard.enabled` | `true` | Enable runtime guard |
+| `run_guard.enforce_weaviate_1369` | `true` | Require target_db_input to contain Weaviate 1.36.9 |
+| `run_guard.enforce_max_iterations_4` | `true` | Require harness.max_iterations == 4 |
+| `run_guard.forbidden_terms` | see config | Forbidden degraded/simulated markers |
 
 #### Collection Pool Settings
 

@@ -1,0 +1,32 @@
+{
+  "19530": {
+    "port": 19530,
+    "allocated_at": "2026-04-14T12:25:16.759491",
+    "allocated_by": "demo_script",
+    "run_id": "demo_run_001",
+    "container_id": null,
+    "purpose": "vector_database",
+    "is_active": true,
+    "last_heartbeat": "2026-04-14T12:25:16.759491"
+  },
+  "6333": {
+    "port": 6333,
+    "allocated_at": "2026-04-14T12:25:17.813501",
+    "allocated_by": "demo_script",
+    "run_id": "demo_run_001",
+    "container_id": null,
+    "purpose": "vector_database",
+    "is_active": true,
+    "last_heartbeat": "2026-04-14T12:25:17.813501"
+  },
+  "8080": {
+    "port": 8080,
+    "allocated_at": "2026-04-14T12:25:18.864222",
+    "allocated_by": "demo_script",
+    "run_id": "demo_run_001",
+    "container_id": null,
+    "purpose": "vector_database",
+    "is_active": true,
+    "last_heartbeat": "2026-04-14T12:25:18.864222"
+  }
+}

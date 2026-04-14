@@ -1,0 +1,12 @@
+- [ ] issues/ 目录结构创建完成（milvus/, qdrant/, weaviate/）
+- [ ] Qdrant v1.17.1 Issue 文件收集完成（35 个）
+- [ ] Weaviate v1.36.9 Issue 文件收集完成（25 个）
+- [ ] Milvus Issue 文件收集完成（23 个）
+- [ ] issues/README.md 索引文件创建完成
+- [ ] README.md 更新完成（三数据库支持说明）
+- [ ] README.md 更新完成（运行结果统计）
+- [ ] .gitignore 配置正确
+- [ ] 敏感文件不在 git 跟踪范围
+- [ ] 新分支 `feature/cross-db-issues-v1` 创建成功
+- [ ] 所有更改已提交
+- [ ] 推送到 GitHub 远程仓库成功

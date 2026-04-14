@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"python -c \\\"\\nfrom src.parsers.doc_parser import APIConstraint, StructuredDocParser\\n\\n# Test APIConstraint creation\\nconstraint = APIConstraint(\\n    parameter='dimension',\\n    min_value...",
-  "error": "Exit code 1\nTraceback (most recent call last):\r\n  File \"<string>\", line 30, in <module>\r\n  File \"C:\\Users\\11428\\Desktop\\ralph\\src\\parsers\\doc_parser.py\", line 170, in parse_html_content\r\n    api_sections = self._find_api_sections(soup)\r\n  File \"C:\\Users\\11428\\Desktop\\ralph\\src\\parsers\\doc_parser.py\", line 210, in _find_api_sections\r\n    section_content = self._get_section_content(heading, tag)\r\n  File \"C:\\Users\\11428\\Desktop\\ralph\\src\\parsers\\doc_parser.py\", line 239, in _get_section_content\r\n  ...",
-  "timestamp": "2026-04-01T07:28:44.377Z",
-  "retry_count": 2
-}

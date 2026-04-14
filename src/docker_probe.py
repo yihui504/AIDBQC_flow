@@ -9,6 +9,7 @@ class DockerLogsProbe:
     
     def __init__(self, container_name: str = "milvus-standalone"):
         self.container_name = container_name
+        self._vector_db_keywords = ["qdrant", "milvus", "weaviate"]
 
     def fetch_recent_logs(self, tail: int = 100) -> str:
         """Fetch the most recent logs from the target docker container."""
@@ -34,10 +35,10 @@ class DockerLogsProbe:
             )
             
             containers = list_cmd.stdout.strip().split('\n')
-            milvus_containers = [c for c in containers if "milvus" in c.lower() and "standalone" in c.lower()]
+            vdb_containers = [c for c in containers if any(kw in c.lower() for kw in self._vector_db_keywords)]
             
-            if milvus_containers:
-                alt_name = milvus_containers[0]
+            if vdb_containers:
+                alt_name = vdb_containers[0]
                 print(f"[DockerProbe] Found alternative container: {alt_name}. Fetching logs...")
                 result = subprocess.run(
                     ["docker", "logs", "--tail", str(tail), alt_name],
@@ -47,7 +48,7 @@ class DockerLogsProbe:
                 )
                 return (result.stdout + "\n" + result.stderr).strip()
             
-            return f"Failed to fetch docker logs: Container '{self.container_name}' not found and no Milvus alternatives detected."
+            return f"Failed to fetch docker logs: Container '{self.container_name}' not found and no vector DB (qdrant/milvus/weaviate) alternatives detected."
             
         except Exception as e:
             return f"Failed to fetch docker logs for {self.container_name}: {e}"
