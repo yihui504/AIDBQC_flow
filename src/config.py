@@ -553,9 +553,15 @@ class ConfigLoader:
                 self._set_nested_value(self.config, config_key, parsed_value)
                 
                 overrides[config_key] = env_value
-                logger.info(f"Overriding config: {config_key} = {parsed_value} (from {env_key})")
+                display_value = "***MASKED***" if self._is_sensitive_key(config_key) else parsed_value
+                logger.info(f"Overriding config: {config_key} = {display_value} (from {env_key})")
 
         return overrides
+
+    def _is_sensitive_key(self, key: str) -> bool:
+        sensitive_patterns = ['password', 'secret', 'api_key', 'token', 'credential', 'access_key']
+        key_lower = key.lower()
+        return any(p in key_lower for p in sensitive_patterns)
 
     def _parse_env_key(self, key_part: str) -> str:
         """
