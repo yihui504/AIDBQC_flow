@@ -326,14 +326,14 @@ Never commit sensitive values (API keys, passwords) to version control.
 **✅ Good:**
 ```bash
 # .env
-LLM_API_KEY=sk-ant-...
-DB_PASSWORD=my_secret_password
+LLM_API_KEY=<your-api-key-here>
+DB_PASSWORD=<your-db-password-here>
 ```
 
 **❌ Bad:**
 ```python
 # config.py
-API_KEY = "sk-ant-..."  # Don't hardcode secrets!
+API_KEY = os.getenv("API_KEY")  # Read from environment variable
 ```
 
 ### 2. Environment-Specific Configuration

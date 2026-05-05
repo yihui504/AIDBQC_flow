@@ -207,9 +207,9 @@ pip install -r requirements.txt
 cp .env.example .env
 
 # 5. 编辑 .env，设置 LLM API Key (三选一)
-#    DEEPSEEK_API_KEY=sk-xxx
-#    ANTHROPIC_API_KEY=sk-ant-xxx
-#    ZHIPUAI_API_KEY=xxx
+#    DEEPSEEK_API_KEY=<your-deepseek-api-key>
+#    ANTHROPIC_API_KEY=<your-anthropic-api-key>
+#    ZHIPUAI_API_KEY=<your-zhipuai-api-key>
 ```
 
 运行时配置文件位于 [`.trae/config.yaml`](.trae/config.yaml)，可通过环境变量以 `AI_DB_QC_` 前缀覆盖任意配置项（如 `AI_DB_QC_HARNESS_MAX_ITERATIONS=8`）。
