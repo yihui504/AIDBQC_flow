@@ -218,7 +218,7 @@ config = EmailConfig(
     smtp_server="smtp.gmail.com",
     smtp_port=587,
     username="your-email@gmail.com",
-    password="your-app-password",
+    password=os.getenv("SMTP_PASSWORD"),
     from_addr="alerts@example.com",
     to_addrs=["team@example.com"],
 )
@@ -234,7 +234,7 @@ from src.alerting.handlers import HandlerFactory, WebhookConfig
 config = WebhookConfig(
     url="https://hooks.example.com/alerts",
     timeout=5.0,
-    headers={"Authorization": "Bearer token123"},
+    headers={"Authorization": f"Bearer {os.getenv('WEBHOOK_AUTH_TOKEN')}"},
 )
 
 handler = HandlerFactory.create_webhook_handler(config)
@@ -246,7 +246,7 @@ handler = HandlerFactory.create_webhook_handler(config)
 from src.alerting.handlers import HandlerFactory, SlackConfig
 
 config = SlackConfig(
-    webhook_url="https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+    webhook_url=os.getenv("SLACK_WEBHOOK_URL"),
     channel="#alerts",
     username="AI-DB-QC Bot",
     icon_emoji=":warning:",
