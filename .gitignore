@@ -31,6 +31,8 @@ venv/
 ENV/
 env/
 .venv/
+.venv*/
+venv2/
 
 # ============================================================================
 # IDE / Editor
@@ -90,6 +92,10 @@ Desktop.ini
 # Project Specific
 # ============================================================================
 .trae/runs/
+.trae/milvus_source/
 *.jsonl
 chroma_data/
 node_modules/
+config.yaml
+test_sessions/
+archive/

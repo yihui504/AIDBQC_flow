@@ -1,3 +1,92 @@
+# AI-DB-QC 架构文档
+
+> **重要提示**: 本文件顶部为 **v6.0 架构概要**，下方分隔线之后为 **v4.4 历史文档**（保留作为参考）。v6.0 架构已大幅变更，请以v6.0概要为准。
+
+---
+
+## v6.0 架构概要
+
+v6.0 将 9-Agent LangGraph 流水线重构为 **TestRuntime + PolicyEngine + EventBus** 三层架构：
+
+### 1. TestRuntime (src/runtime/loop.py, 286行) — 主循环，包装 PydanticAI Agent
+
+- 轮次执行 (`execute_round`)
+- 暂停/恢复/跳过/停止
+- 模型降级: `deepseek-chat` → `deepseek-reasoner` → `gemini-2.0-flash`
+- 适配器重置 (recovery 触发)
+
+### 2. PolicyEngine (src/policy/engine.py) — 三层策略组合
+
+- **FocusAdvisor**: 工具焦点建议 + `out_of_focus` 检测
+- **PermissionEvaluator**: `cautious` / `aggressive` 权限模式
+- **SafetyGuard**: 危险操作检测 (`DELETE ALL`, `TRUNCATE` 等)
+
+### 3. EventBus (src/events/bus.py, 76行) — 事件驱动
+
+- 12 种 `TestEventType`
+- 发布/订阅/去重/缓冲
+- 驱动 UI 更新
+
+### 4. 27个工具函数 (src/tools/) — 替代9个Agent
+
+| 分类 | 工具 |
+|------|------|
+| **DB工具 (13个)** | `create_collection`, `insert_data`, `search`, `query`, `delete_data`, `upsert_data`, `flush`, `load_collection`, `release_collection`, `get_collection_info`, `list_collections`, `drop_collection`, `health_check` |
+| **Doc工具 (2个)** | `doc_search`, `doc_validate_reference` |
+| **Source工具 (4个)** | `source_clone_repo`, `source_search`, `source_read`, `source_analyze_module` |
+| **Code工具 (1个)** | `code_run_mre` (Docker沙箱) |
+| **Verify工具 (4个)** | `contract_validate_source`, `contract_validate_behavior`, `contract_tri_validate`, `verify_defect` |
+| **Flow工具 (3个)** | `update_focus`, `record_defect`, `generate_feedback` |
+
+### 5. 4个向量数据库适配器 (src/adapters/)
+
+| 适配器 | 行数 | 依赖 | 特点 |
+|--------|------|------|------|
+| `MilvusAdapter` | 250行 | pymilvus | 线程安全 |
+| `PgvectorAdapter` | 205行 | asyncpg | 连接池 |
+| `QdrantAdapter` | 161行 | AsyncQdrantClient | 异步客户端 |
+| `WeaviateAdapter` | 169行 | WeaviateAsyncClient | 异步客户端 |
+
+### 6. RecoveryStrategy (src/runtime/recovery.py, 129行)
+
+- **6类错误分类**: `API_TIMEOUT`, `DB_CONNECTION_LOST`, `RATE_LIMITED`, `CONTEXT_OVERFLOW`, `POLICY_BLOCKED`, `TOOL_EXECUTION_FAILURE`
+- 指数退避重试 (1s / 2s / 4s)
+- 适配器重置 + 上下文压缩
+
+### 7. FalsePositiveFilter (src/tools/verify/filter.py, 139行)
+
+- MRE 可复现性检查
+- 证据评分
+- ANN 预期行为判定
+- 开发者审查评分
+
+### 8. SessionStore (src/session/store.py, 88行)
+
+- JSONL 追加写入 + JSON 快照
+- `fork` (深拷贝)
+- `compact_state` (截断列表)
+
+### v4.4 → v6.0 映射
+
+| v4.4 组件 | v6.0 对应 |
+|-----------|-----------|
+| Agent0 (Recon) | `doc_search` + `source_clone_repo` 工具 |
+| Agent1 (Contract Analyst) | `contract_validate_source` / `contract_validate_behavior` / `contract_tri_validate` 工具 |
+| Agent2 (Test Generator) | PydanticAI Agent 自主编排 |
+| Agent3 (Executor + Gate) | `db_*` 工具 + PolicyEngine 门控 |
+| Agent4 (Oracle) | `verify_defect` + `FalsePositiveFilter` |
+| Agent5 (Diagnoser) | `record_defect` + `generate_feedback` 工具 |
+| Agent6 (Verifier) | `verify_defect` + FP 过滤 |
+| Reranker | 移除（由 Agent 自主判断） |
+| LangGraph StateGraph | TestRuntime 主循环 |
+| WorkflowState | UnifiedState |
+
+---
+
+> **以下为 v4.4 历史文档，仅作参考，不代表当前架构。**
+
+---
+
 # AI-DB-QC 多智能体 (Multi-Agent) 工作流设计方案
 
 > **文档版本**: v4.4 | 本文档反映 AI-DB-QC v4.4 架构，包含 L2 运行时门控、四型缺陷分类决策树、文档预处理流水线、契约回退系统与 Reranker 智能体等核心特性。

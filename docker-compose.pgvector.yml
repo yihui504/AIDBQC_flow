@@ -1,0 +1,28 @@
+version: '3.5'
+
+services:
+  pgvector:
+    container_name: pgvector
+    image: pgvector/pgvector:pg17
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: aidbqc
+      POSTGRES_PASSWORD: aidbqc
+      POSTGRES_DB: aidbqc
+    volumes:
+      - pgvector-data:/var/lib/postgresql/data
+    networks:
+      - pgvector
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aidbqc"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+networks:
+  pgvector:
+    driver: bridge
+
+volumes:
+  pgvector-data:

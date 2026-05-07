@@ -1,0 +1,244 @@
+{
+  "meta": {
+    "version": "v6.0",
+    "last_updated": "2026-05-07",
+    "update_reason": "基于代码全面扫描 + Deep Interview决策，更新各任务实际完成状态和优先级"
+  },
+  "tasks": [
+    {
+      "id": "TASK-0",
+      "title": "前置验证 (DeepSeek V4 + PydanticAI + Docker)",
+      "phase": "Phase 0: Prerequisites",
+      "priority": "critical",
+      "status": "in_progress",
+      "completion_percentage": 60.0,
+      "notes": "PydanticAI已验证，Docker沙箱已实现，DeepSeek V4 Think模式待端到端验证"
+    },
+    {
+      "id": "TASK-1",
+      "title": "项目骨架 + v4.x清理 + AppConfig多库重构 + Bug修复",
+      "phase": "Phase 1: Foundation",
+      "priority": "critical",
+      "status": "completed",
+      "completion_percentage": 95.0,
+      "notes": "AppConfig完整(127行)，main.py CLI入口(130行)，v4.x清理完成"
+    },
+    {
+      "id": "TASK-2",
+      "title": "统一状态模型 + FocusMode + @tool_meta",
+      "phase": "Phase 1: Foundation",
+      "priority": "critical",
+      "status": "completed",
+      "completion_percentage": 100.0,
+      "notes": "UnifiedState(156行)+FocusMode+tool_meta+单元测试(23个测试方法)+from_legacy迁移"
+    },
+    {
+      "id": "TASK-3",
+      "title": "DBAdapter层 + Docker基础设施",
+      "phase": "Phase 1: Foundation",
+      "priority": "critical",
+      "status": "in_progress",
+      "completion_percentage": 75.0,
+      "notes": "4个适配器全部实现(Milvus 250行/Pgvector 205行/Qdrant 161行/Weaviate 169行)，Docker Compose缺3套数据库环境"
+    },
+    {
+      "id": "TASK-4a",
+      "title": "EventBus",
+      "phase": "Phase 2: Core Infrastructure",
+      "priority": "high",
+      "status": "completed",
+      "completion_percentage": 95.0,
+      "notes": "EventBus+TestEventType(12种事件)+去重+缓冲+单元测试(10个测试方法)，threading.Lock→asyncio.Lock待迁移"
+    },
+    {
+      "id": "TASK-4b",
+      "title": "PolicyEngine",
+      "phase": "Phase 2: Core Infrastructure",
+      "priority": "high",
+      "status": "completed",
+      "completion_percentage": 95.0,
+      "notes": "FocusAdvisor+PermissionEvaluator+SafetyGuard+单元测试(15个测试方法)，嵌套结构检测待完善"
+    },
+    {
+      "id": "TASK-5",
+      "title": "ToolRegistry + 工具迁移 (27个工具)",
+      "phase": "Phase 2: Core Infrastructure",
+      "priority": "critical",
+      "status": "completed",
+      "completion_percentage": 100.0,
+      "notes": "全部27个工具已实现，无占位符。DB 13个+Doc 2个+Source 4个+Code 1个+Verify 4个+Flow 3个。ToolOutputCompressor(169行，8种压缩策略)"
+    },
+    {
+      "id": "TASK-6",
+      "title": "SessionStore",
+      "phase": "Phase 2: Core Infrastructure",
+      "priority": "high",
+      "status": "completed",
+      "completion_percentage": 95.0,
+      "notes": "JSONL日志+JSON快照+fork+compact_state+单元测试(12个测试方法)，压缩策略可配置化待做"
+    },
+    {
+      "id": "TASK-7",
+      "title": "Docker沙箱",
+      "phase": "Phase 2: Core Infrastructure",
+      "priority": "high",
+      "status": "completed",
+      "completion_percentage": 90.0,
+      "notes": "DockerSandbox(99行)+镜像构建+code_run_mre集成，Docker Compose和资源限制待做"
+    },
+    {
+      "id": "TASK-8",
+      "title": "TestRuntime + Agent + 恢复策略 + 用户交互",
+      "phase": "Phase 3: Runtime",
+      "priority": "critical",
+      "status": "completed",
+      "completion_percentage": 95.0,
+      "notes": "TestRuntime(286行)+create_agent(249行)+RecoveryStrategy(129行，6类错误)+用户交互(pause/resume/focus/skip/stop)+单元测试(20个测试方法)"
+    },
+    {
+      "id": "TASK-9",
+      "title": "DeepSeek V4集成",
+      "phase": "Phase 3: Runtime",
+      "priority": "high",
+      "status": "in_progress",
+      "completion_percentage": 50.0,
+      "notes": "ModelFallback降级链+deepseek_provider.py已实现，Think模式端到端验证+1M上下文配置待做"
+    },
+    {
+      "id": "TASK-10",
+      "title": "自动假阳性过滤",
+      "phase": "Phase 3: Runtime",
+      "priority": "high",
+      "status": "completed",
+      "completion_percentage": 95.0,
+      "notes": "FalsePositiveFilter(139行)+ANNWhitelistChecker(164行)+FilterResult三级判定，FP阈值可配置化待做"
+    },
+    {
+      "id": "TASK-11",
+      "title": "集成测试 + CLI入口 + UI适配",
+      "phase": "Phase 4: Integration & UI",
+      "priority": "high",
+      "status": "completed",
+      "completion_percentage": 85.0,
+      "notes": "CLI(130行)+UI(display.py 175行+input_handler.py 96行)+8个E2E集成测试(185行)，真实数据库E2E测试待做"
+    },
+    {
+      "id": "TASK-12",
+      "title": "单元测试补全 + 验收标准验证",
+      "phase": "Phase 4: Integration & UI",
+      "priority": "high",
+      "status": "in_progress",
+      "completion_percentage": 75.0,
+      "notes": "6个核心模块单元测试已完成(93个测试方法)，DBAdapter mock测试+DockerSandbox测试+工具函数测试待补 → 推迟至v6.1"
+    },
+    {
+      "id": "TASK-13",
+      "title": "⭐ 真实数据库E2E测试 (Milvus+Qdrant)",
+      "phase": "Phase 5: Real E2E Validation",
+      "priority": "critical",
+      "status": "completed",
+      "completion_percentage": 100.0,
+      "notes": "✅ v6.0最小验收通过！发现4个真实缺陷(≥2要求)。Milvus 11个E2E测试+Qdrant 12个E2E测试全部通过。修复8个Bug(MilvusAdapter死锁/QdrantAdapter兼容性/verify_defect issue_id/record_defect兼容性等)。"
+    }
+  ],
+  "progress_report": {
+    "summary": {
+      "total_tasks": 15,
+      "completed_tasks": 9,
+      "in_progress_tasks": 3,
+      "not_started_tasks": 0,
+      "completion_percentage": 90.0,
+      "v6_min_acceptance_target": "TASK-13 (真实E2E) ✅ 通过",
+      "v6_source_files": 43,
+      "v6_source_lines": 4106,
+      "v6_test_files": 9,
+      "v6_test_methods": 126,
+      "v6_test_lines": 1200,
+      "deep_interview_ambiguity": "18% (4轮, 阈值20%)"
+    },
+    "by_phase": {
+      "Phase 0: Prerequisites": {
+        "total": 1,
+        "completed": 0,
+        "in_progress": 1,
+        "percentage": 60.0
+      },
+      "Phase 1: Foundation": {
+        "total": 3,
+        "completed": 2,
+        "in_progress": 1,
+        "percentage": 90.0
+      },
+      "Phase 2: Core Infrastructure": {
+        "total": 5,
+        "completed": 5,
+        "in_progress": 0,
+        "percentage": 96.0
+      },
+      "Phase 3: Runtime": {
+        "total": 3,
+        "completed": 2,
+        "in_progress": 1,
+        "percentage": 80.0
+      },
+      "Phase 4: Integration & UI": {
+        "total": 2,
+        "completed": 1,
+        "in_progress": 1,
+        "percentage": 80.0
+      },
+      "Phase 5: Real E2E Validation": {
+        "total": 1,
+        "completed": 1,
+        "in_progress": 0,
+        "percentage": 100.0,
+        "notes": "✅ v6.0最小验收通过！发现4个真实缺陷"
+      }
+    },
+    "v6_min_acceptance": {
+      "target": "TASK-13: 真实数据库E2E测试 (Milvus+Qdrant)",
+      "acceptance_criteria": [
+        "连接真实Milvus执行完整测试流程(create→insert→search→delete)",
+        "连接真实Qdrant执行基本CRUD操作",
+        "多轮Fuzzing后发现≥2个真实缺陷(任意类型)",
+        "真实缺陷有完整证据链(执行日志+数据库状态+MRE代码)",
+        "真实缺陷能生成格式正确的BugIssue"
+      ],
+      "prerequisites_confirmed": {
+        "deepseek_api": true,
+        "docker": true,
+        "memory": true,
+        "network": "未确认"
+      }
+    },
+    "remaining_work": [
+      "✅ [v6.0完成] 真实数据库E2E测试 (Milvus+Qdrant) — TASK-13 — 发现4个真实缺陷",
+      "[v6.1推迟] Docker Compose统一+Weaviate gRPC端口 — TASK-14",
+      "[v6.1推迟] DBAdapter mock单元测试 — TASK-15",
+      "[v6.1推迟] 工具函数单元测试 — TASK-16",
+      "[v6.1推迟] 模块配置化(恢复策略/FP阈值/压缩策略) — TASK-17",
+      "[v6.1推迟] EventBus并发安全+MilvusAdapter Lock审查 — TASK-18",
+      "[v6.1推迟] DeepSeek Think模式端到端验证 — TASK-19",
+      "[v6.1推迟] Pgvector/Weaviate真实E2E测试 — TASK-20"
+    ]
+  },
+  "legacy_v4_tasks": {
+    "note": "以下为v4.x旧路线图任务，已由v6.0架构替代，仅保留供参考",
+    "superseded_tasks": [
+      {"id": "TASK-1.1", "title": "PersistentCollectionPool", "status": "superseded_by_v6_adapter_factory"},
+      {"id": "TASK-1.2", "title": "异常处理标准化", "status": "superseded_by_v6_recovery_strategy"},
+      {"id": "TASK-1.3", "title": "单元测试补充", "status": "partially_completed_in_v6_TASK-12"},
+      {"id": "TASK-1.4", "title": "配置中心化", "status": "completed_in_v6_TASK-1"},
+      {"id": "TASK-1.5", "title": "Context Reset Strategy", "status": "superseded_by_v6_compact_state"},
+      {"id": "TASK-2.1", "title": "EnhancedSemanticOracle", "status": "superseded_by_v6_contract_system"},
+      {"id": "TASK-2.2", "title": "EnhancedTestGenerator", "status": "superseded_by_v6_agent_system"},
+      {"id": "TASK-2.3", "title": "EnhancedDefectDeduplicator", "status": "superseded_by_v6_fp_filter"},
+      {"id": "TASK-3.1", "title": "Streamlit监控仪表板", "status": "superseded_by_v6_rich_ui"},
+      {"id": "TASK-3.2", "title": "AlertManager告警系统", "status": "superseded_by_v6_event_bus"},
+      {"id": "TASK-4.1", "title": "基线对比实验", "status": "pending"},
+      {"id": "TASK-4.2", "title": "跨数据库验证", "status": "pending"},
+      {"id": "TASK-4.3", "title": "长期稳定性测试", "status": "pending"}
+    ]
+  },
+  "export_date": "2026-05-07T00:00:00"
+}
